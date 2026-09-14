@@ -6,6 +6,7 @@ class OrderStates(StatesGroup):
     waiting_price = State()     # цена в юанях
     waiting_qty = State()       # количество
     waiting_size = State()      # размер или "-"
+    waiting_weight = State()    # вес товара в кг
 
 
 class CabinetStates(StatesGroup):
