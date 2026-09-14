@@ -12,15 +12,17 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS cart_items (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,
-    link        TEXT,
-    photo_id    TEXT,
-    price_yuan  REAL NOT NULL,
-    quantity    INTEGER NOT NULL,
-    size        TEXT,
-    cost_rub    REAL NOT NULL,
-    created_at  TEXT
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL,
+    link          TEXT,
+    photo_id      TEXT,
+    price_yuan    REAL NOT NULL,
+    quantity      INTEGER NOT NULL,
+    size          TEXT,
+    weight_kg     REAL,
+    shipping_rub  REAL DEFAULT 0,
+    cost_rub      REAL NOT NULL,
+    created_at    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -32,14 +34,16 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 CREATE TABLE IF NOT EXISTS order_items (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id    INTEGER NOT NULL,
-    link        TEXT,
-    photo_id    TEXT,
-    price_yuan  REAL NOT NULL,
-    quantity    INTEGER NOT NULL,
-    size        TEXT,
-    cost_rub    REAL NOT NULL
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id      INTEGER NOT NULL,
+    link          TEXT,
+    photo_id      TEXT,
+    price_yuan    REAL NOT NULL,
+    quantity      INTEGER NOT NULL,
+    size          TEXT,
+    weight_kg     REAL,
+    shipping_rub  REAL DEFAULT 0,
+    cost_rub      REAL NOT NULL
 );
 """
 
@@ -76,12 +80,15 @@ async def get_user(user_id: int):
 
 
 async def add_cart_item(user_id: int, link: str, photo_id: str, price_yuan: float,
-                         quantity: int, size: str, cost_rub: float):
+                         quantity: int, size: str, cost_rub: float,
+                         weight_kg: float = None, shipping_rub: float = 0):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO cart_items (user_id, link, photo_id, price_yuan, quantity, size, cost_rub, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, link, photo_id, price_yuan, quantity, size, cost_rub, datetime.utcnow().isoformat()),
+            """INSERT INTO cart_items
+               (user_id, link, photo_id, price_yuan, quantity, size, weight_kg, shipping_rub, cost_rub, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, link, photo_id, price_yuan, quantity, size, weight_kg, shipping_rub, cost_rub,
+             datetime.utcnow().isoformat()),
         )
         await db.commit()
 
@@ -134,9 +141,11 @@ async def create_order_from_cart(user_id: int) -> int | None:
         order_id = cur.lastrowid
         for i in items:
             await db.execute(
-                """INSERT INTO order_items (order_id, link, photo_id, price_yuan, quantity, size, cost_rub)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (order_id, i["link"], i["photo_id"], i["price_yuan"], i["quantity"], i["size"], i["cost_rub"]),
+                """INSERT INTO order_items
+                   (order_id, link, photo_id, price_yuan, quantity, size, weight_kg, shipping_rub, cost_rub)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (order_id, i["link"], i["photo_id"], i["price_yuan"], i["quantity"], i["size"],
+                 i["weight_kg"], i["shipping_rub"], i["cost_rub"]),
             )
         await db.commit()
     await clear_cart(user_id)
