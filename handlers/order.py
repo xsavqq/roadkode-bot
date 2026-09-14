@@ -3,7 +3,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 import database as db
-from config import calc_cost, EXCHANGE_RATE, MARKUP_PERCENT
+from config import calc_cost, calc_shipping, yuan_rate_text, EXCHANGE_RATE, MARKUP_PERCENT
 from states import OrderStates
 from keyboards import after_item_added_kb, main_menu, skip_kb
 
@@ -13,12 +13,15 @@ router = Router()
 async def start_new_item(target, state: FSMContext):
     """target — Message или CallbackQuery, откуда взять chat/answer."""
     await state.set_state(OrderStates.waiting_link)
-    text = "🔗 Отправьте ссылку на товар.\n\nЕсли ссылки нет или вы не умеете её копировать — отправьте символ -"
+    rate_text = yuan_rate_text()
+    link_text = "🔗 Отправьте ссылку на товар.\n\nЕсли ссылки нет или вы не умеете её копировать — отправьте символ -"
     if isinstance(target, CallbackQuery):
-        await target.message.answer(text, reply_markup=skip_kb)
+        await target.message.answer(rate_text)
+        await target.message.answer(link_text, reply_markup=skip_kb)
         await target.answer()
     else:
-        await target.answer(text, reply_markup=skip_kb)
+        await target.answer(rate_text)
+        await target.answer(link_text, reply_markup=skip_kb)
 
 
 @router.message(F.text == "🛒 Новый заказ")
@@ -82,13 +85,39 @@ async def got_qty(message: Message, state: FSMContext):
     )
 
 
-# ---------- Шаг 4: размер -> считаем и сохраняем ----------
+# ---------- Шаг 4: размер -> просим вес ----------
 @router.message(OrderStates.waiting_size, F.text)
 async def got_size(message: Message, state: FSMContext):
     size = None if message.text.strip() == "-" else message.text.strip()
+    await state.update_data(size=size)
+    await state.set_state(OrderStates.waiting_weight)
+    await message.answer(
+        "⚖️ Введите вес товара в кг (например: 0.5 или 1.2).\n"
+        "Если вес неизвестен — отправьте -",
+        reply_markup=skip_kb,
+    )
+
+
+# ---------- Шаг 5: вес -> считаем и сохраняем ----------
+@router.message(OrderStates.waiting_weight, F.text)
+async def got_weight(message: Message, state: FSMContext):
+    raw = message.text.strip().replace(",", ".")
+    if raw == "-":
+        weight = None
+    else:
+        try:
+            weight = float(raw)
+            if weight <= 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("⚠️ Нужно отправить число, например: 0.5 или 1.2, либо -")
+            return
+
     data = await state.get_data()
 
     cost = calc_cost(data["price_yuan"], data["quantity"])
+    shipping = calc_shipping(weight) if weight else 0
+    total_item_cost = round(cost + shipping, 2)
 
     await db.add_cart_item(
         user_id=message.from_user.id,
@@ -96,17 +125,23 @@ async def got_size(message: Message, state: FSMContext):
         photo_id=data.get("photo_id"),
         price_yuan=data["price_yuan"],
         quantity=data["quantity"],
-        size=size,
-        cost_rub=cost,
+        size=data.get("size"),
+        weight_kg=weight,
+        shipping_rub=shipping,
+        cost_rub=total_item_cost,
     )
 
     cart = await db.get_cart(message.from_user.id)
     total = await db.get_cart_total(message.from_user.id)
 
+    weight_line = f"Доставка ({weight:.2f} кг): {shipping:.0f} ₽\n" if weight else ""
+
     await message.answer(
         f"✅ Товар №{len(cart)} добавлен\n\n"
-        f"Стоимость: {cost:.0f} ₽\n"
-        f"Общая сумма: {total:.0f} ₽",
+        f"Стоимость товара: {cost:.0f} ₽\n"
+        f"{weight_line}"
+        f"Итого за товар: {total_item_cost:.0f} ₽\n\n"
+        f"Общая сумма заказа: {total:.0f} ₽",
         reply_markup=after_item_added_kb(),
     )
     # возвращаем обычную клавиатуру меню (skip_kb был one_time)
