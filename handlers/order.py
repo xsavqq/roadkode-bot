@@ -5,10 +5,25 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 import database as db
-from ai_vision import estimate_weight_from_image
-from config import calc_cost, calc_shipping, yuan_rate_text
+
+from ai_vision import (
+    estimate_weight_from_image
+)
+
+from config import (
+    calc_cost,
+    calc_shipping,
+    yuan_rate_text
+)
+
 from states import OrderStates
-from keyboards import after_item_added_kb, main_menu, skip_kb
+
+from keyboards import (
+    after_item_added_kb,
+    main_menu,
+    skip_kb
+)
+
 
 router = Router()
 
@@ -21,38 +36,43 @@ async def start_new_item(
     target,
     state: FSMContext
 ):
+
     await state.set_state(
         OrderStates.waiting_link
     )
 
     rate_text = yuan_rate_text()
 
-    link_text = (
+    instruction = (
         "🔗 Отправьте ссылку на товар "
         "или 📷 фото / скрин товара.\n\n"
-        "Если ссылки и фото нет — отправьте символ -"
+        "Если ссылки и фото нет — "
+        "отправьте символ -"
     )
 
-    if isinstance(target, CallbackQuery):
+    if isinstance(
+        target,
+        CallbackQuery
+    ):
+
         await target.message.answer(
             rate_text
         )
 
         await target.message.answer(
-            link_text,
-            reply_markup=skip_kb
+            instruction
         )
 
         await target.answer()
 
     else:
+
         await target.answer(
             rate_text
         )
 
         await target.answer(
-            link_text,
-            reply_markup=skip_kb
+            instruction
         )
 
 
@@ -63,6 +83,7 @@ async def new_order(
     message: Message,
     state: FSMContext
 ):
+
     await start_new_item(
         message,
         state
@@ -76,6 +97,7 @@ async def add_item_cb(
     callback: CallbackQuery,
     state: FSMContext
 ):
+
     await start_new_item(
         callback,
         state
@@ -83,7 +105,7 @@ async def add_item_cb(
 
 
 # =========================================================
-# ШАГ 1 — ССЫЛКА / ФОТО / "-"
+# ФОТО
 # =========================================================
 
 @router.message(
@@ -95,20 +117,17 @@ async def got_photo(
     state: FSMContext,
     bot: Bot
 ):
-    """
-    Фото товара.
-    AI определяет примерный диапазон веса.
 
-    ВАЖНО:
-    AI-вес НЕ используется для расчёта доставки.
-    """
-
-    photo_id = message.photo[-1].file_id
+    photo_id = (
+        message.photo[-1].file_id
+    )
 
     await state.update_data(
         link=None,
         photo_id=photo_id,
+
         weight_estimated=False,
+
         estimated_weight_min=None,
         estimated_weight_max=None,
         estimated_weight_mid=None,
@@ -119,8 +138,11 @@ async def got_photo(
     )
 
     try:
-        telegram_file = await bot.get_file(
-            photo_id
+
+        telegram_file = (
+            await bot.get_file(
+                photo_id
+            )
         )
 
         photo_buffer = BytesIO()
@@ -130,38 +152,55 @@ async def got_photo(
             destination=photo_buffer
         )
 
-        photo_bytes = photo_buffer.getvalue()
+        photo_bytes = (
+            photo_buffer.getvalue()
+        )
 
         if not photo_bytes:
             raise ValueError(
-                "Не удалось получить изображение"
+                "Не удалось скачать изображение"
             )
 
-        # ВАЖНО:
-        # ai_vision.py принимает только image_bytes.
-        result = await estimate_weight_from_image(
-            photo_bytes
+        # Только один аргумент!
+        result = (
+            await estimate_weight_from_image(
+                photo_bytes
+            )
         )
 
-        min_weight = result["min_kg"]
-        max_weight = result["max_kg"]
+        min_weight = result[
+            "min_kg"
+        ]
 
+        max_weight = result[
+            "max_kg"
+        ]
+
+        # Средний вес нужен только технически
+        # для хранения. В оплату он НЕ попадает.
         mid_weight = round(
-            (min_weight + max_weight) / 2,
+            (
+                min_weight
+                + max_weight
+            ) / 2,
             3
         )
 
         await state.update_data(
             weight_estimated=True,
+
             estimated_weight_min=min_weight,
             estimated_weight_max=max_weight,
             estimated_weight_mid=mid_weight,
+
             estimated_product_type=result.get(
                 "product_type"
             ),
+
             estimated_confidence=result.get(
                 "confidence"
             ),
+
             estimated_note=result.get(
                 "note"
             ),
@@ -169,37 +208,48 @@ async def got_photo(
 
         await message.answer(
             "🤖 Фото проанализировано.\n\n"
-            "Вес будет использован только как "
-            "ориентир для менеджера.\n\n"
+            "Вес будет использован только "
+            "как ориентир для менеджера.\n\n"
             "🚚 Примерная доставка НЕ будет "
             "добавлена в сумму к оплате."
         )
 
-    except Exception:
-        # Если AI не смог определить вес,
-        # НЕ заставляем пользователя вводить
-        # примерный вес вручную.
+    except Exception as exc:
+
+        print(
+            "AI weight estimation error:",
+            repr(exc)
+        )
+
         await state.update_data(
             weight_estimated=False,
+
             estimated_weight_min=None,
             estimated_weight_max=None,
             estimated_weight_mid=None,
         )
 
         await message.answer(
-            "⚠️ Не удалось автоматически определить "
-            "вес по фото.\n\n"
+            "⚠️ Не удалось автоматически "
+            "определить вес по фото.\n\n"
             "Продолжаем оформление. "
-            "Доставку менеджер уточнит после "
-            "фактического взвешивания."
+            "Доставку менеджер уточнит "
+            "после фактического взвешивания."
         )
 
-    # В любом случае после фото спрашиваем цену.
-    await ask_price(
-        message,
-        state
+    # После фото ВСЕГДА идём к цене.
+    await state.set_state(
+        OrderStates.waiting_price
     )
 
+    await message.answer(
+        "💴 Введите цену в юанях, только число."
+    )
+
+
+# =========================================================
+# ССЫЛКА / "-"
+# =========================================================
 
 @router.message(
     OrderStates.waiting_link,
@@ -209,6 +259,7 @@ async def got_link_text(
     message: Message,
     state: FSMContext
 ):
+
     text = message.text.strip()
 
     link = (
@@ -220,22 +271,14 @@ async def got_link_text(
     await state.update_data(
         link=link,
         photo_id=None,
+
         weight_estimated=False,
+
         estimated_weight_min=None,
         estimated_weight_max=None,
         estimated_weight_mid=None,
     )
 
-    await ask_price(
-        message,
-        state
-    )
-
-
-async def ask_price(
-    message: Message,
-    state: FSMContext
-):
     await state.set_state(
         OrderStates.waiting_price
     )
@@ -246,7 +289,7 @@ async def ask_price(
 
 
 # =========================================================
-# ШАГ 2 — ЦЕНА
+# ЦЕНА
 # =========================================================
 
 @router.message(
@@ -257,6 +300,7 @@ async def got_price(
     message: Message,
     state: FSMContext
 ):
+
     raw = (
         message.text
         .strip()
@@ -264,16 +308,19 @@ async def got_price(
     )
 
     try:
+
         price = float(raw)
 
         if price <= 0:
             raise ValueError
 
     except ValueError:
+
         await message.answer(
             "⚠️ Нужно отправить число, "
             "например: 47 или 47.5"
         )
+
         return
 
     await state.update_data(
@@ -285,12 +332,13 @@ async def got_price(
     )
 
     await message.answer(
-        "🔢 Введите количество, только целое число."
+        "🔢 Введите количество, "
+        "только целое число."
     )
 
 
 # =========================================================
-# ШАГ 3 — КОЛИЧЕСТВО
+# КОЛИЧЕСТВО
 # =========================================================
 
 @router.message(
@@ -301,13 +349,19 @@ async def got_qty(
     message: Message,
     state: FSMContext
 ):
+
     raw = message.text.strip()
 
-    if not raw.isdigit() or int(raw) <= 0:
+    if (
+        not raw.isdigit()
+        or int(raw) <= 0
+    ):
+
         await message.answer(
             "⚠️ Нужно отправить целое число, "
             "например: 1 или 2"
         )
+
         return
 
     await state.update_data(
@@ -321,12 +375,12 @@ async def got_qty(
     await message.answer(
         "📏 Введите размер.\n"
         "Если размера нет — отправьте -",
-        reply_markup=skip_kb,
+        reply_markup=skip_kb
     )
 
 
 # =========================================================
-# ШАГ 4 — РАЗМЕР
+# РАЗМЕР
 # =========================================================
 
 @router.message(
@@ -337,6 +391,7 @@ async def got_size(
     message: Message,
     state: FSMContext
 ):
+
     size = (
         None
         if message.text.strip() == "-"
@@ -350,27 +405,30 @@ async def got_size(
     data = await state.get_data()
 
     # =====================================================
-    # ЕСЛИ БЫЛО ФОТО И AI ОПРЕДЕЛИЛ ВЕС
+    # ЕСЛИ БЫЛО ФОТО
     # =====================================================
 
-    if data.get("weight_estimated"):
+    if data.get(
+        "weight_estimated"
+    ):
 
         await save_item(
             message,
             state,
+
             weight=data.get(
                 "estimated_weight_mid"
             ),
+
             shipping=0,
-            weight_estimated=True,
+
+            weight_estimated=True
         )
 
         return
 
     # =====================================================
-    # ЕСЛИ БЫЛА ТОЛЬКО ССЫЛКА
-    #
-    # Вес вручную можно оставить для старого сценария.
+    # ЕСЛИ БЫЛА ССЫЛКА
     # =====================================================
 
     await state.set_state(
@@ -381,12 +439,12 @@ async def got_size(
         "⚖️ Введите вес товара в кг "
         "(например: 0.5 или 1.2).\n"
         "Если вес неизвестен — отправьте -",
-        reply_markup=skip_kb,
+        reply_markup=skip_kb
     )
 
 
 # =========================================================
-# ШАГ 5 — РУЧНОЙ ВЕС
+# РУЧНОЙ ВЕС
 # =========================================================
 
 @router.message(
@@ -397,6 +455,7 @@ async def got_weight(
     message: Message,
     state: FSMContext
 ):
+
     raw = (
         message.text
         .strip()
@@ -404,20 +463,25 @@ async def got_weight(
     )
 
     if raw == "-":
+
         weight = None
 
     else:
+
         try:
+
             weight = float(raw)
 
             if weight <= 0:
                 raise ValueError
 
         except ValueError:
+
             await message.answer(
                 "⚠️ Нужно отправить число, "
                 "например: 0.5 или 1.2, либо -"
             )
+
             return
 
     shipping = (
@@ -429,14 +493,17 @@ async def got_weight(
     await save_item(
         message,
         state,
+
         weight=weight,
+
         shipping=shipping,
-        weight_estimated=False,
+
+        weight_estimated=False
     )
 
 
 # =========================================================
-# СОХРАНЕНИЕ ТОВАРА
+# СОХРАНЕНИЕ
 # =========================================================
 
 async def save_item(
@@ -444,8 +511,9 @@ async def save_item(
     state: FSMContext,
     weight,
     shipping: float,
-    weight_estimated: bool,
+    weight_estimated: bool
 ):
+
     data = await state.get_data()
 
     cost = calc_cost(
@@ -453,61 +521,72 @@ async def save_item(
         data["quantity"]
     )
 
-    # =====================================================
-    # КРИТИЧЕСКИ ВАЖНО
+    # КРИТИЧЕСКИ ВАЖНО:
     #
-    # Если вес AI:
+    # AI-вес НЕ добавляет доставку.
     #
-    # стоимость = только товар
-    # доставка = 0
-    #
-    # AI-вес НЕ влияет на оплату.
-    # =====================================================
-
     if weight_estimated:
+
         total_item_cost = round(
             cost,
             2
         )
+
+        shipping_to_save = 0
+
     else:
+
         total_item_cost = round(
             cost + shipping,
             2
         )
 
+        shipping_to_save = shipping
+
     await db.add_cart_item(
         user_id=message.from_user.id,
-        link=data.get("link"),
-        photo_id=data.get("photo_id"),
-        price_yuan=data["price_yuan"],
-        quantity=data["quantity"],
-        size=data.get("size"),
+
+        link=data.get(
+            "link"
+        ),
+
+        photo_id=data.get(
+            "photo_id"
+        ),
+
+        price_yuan=data[
+            "price_yuan"
+        ],
+
+        quantity=data[
+            "quantity"
+        ],
+
+        size=data.get(
+            "size"
+        ),
 
         weight_kg=weight,
 
         weight_min_kg=(
-            data.get("estimated_weight_min")
+            data.get(
+                "estimated_weight_min"
+            )
             if weight_estimated
             else None
         ),
 
         weight_max_kg=(
-            data.get("estimated_weight_max")
+            data.get(
+                "estimated_weight_max"
+            )
             if weight_estimated
             else None
         ),
 
-        weight_estimated=(
-            1
-            if weight_estimated
-            else 0
-        ),
+        weight_estimated=weight_estimated,
 
-        shipping_rub=(
-            0
-            if weight_estimated
-            else shipping
-        ),
+        shipping_rub=shipping_to_save,
 
         cost_rub=total_item_cost,
     )
@@ -521,7 +600,7 @@ async def save_item(
     )
 
     # =====================================================
-    # ТЕКСТ ДЛЯ AI-ВЕСА
+    # AI-ВЕС
     # =====================================================
 
     if weight_estimated:
@@ -536,43 +615,42 @@ async def save_item(
 
         weight_block = (
             f"🤖 Примерный вес 1 шт.: "
-            f"{min_weight:.2f}–{max_weight:.2f} кг\n"
+            f"{min_weight:.2f}–"
+            f"{max_weight:.2f} кг\n"
             "🚚 Доставка: уточняется после "
-            "фактического взвешивания\n"
+            "фактического взвешивания"
         )
 
     # =====================================================
-    # ТЕКСТ ДЛЯ РУЧНОГО ВЕСА
+    # РУЧНОЙ ВЕС
     # =====================================================
+
+    elif weight:
+
+        weight_block = (
+            f"⚖️ Вес: {weight:.2f} кг\n"
+            f"🚚 Доставка: "
+            f"{shipping:.0f} ₽"
+        )
 
     else:
 
-        if weight:
-            weight_block = (
-                f"⚖️ Вес: {weight:.2f} кг\n"
-                f"🚚 Доставка: {shipping:.0f} ₽\n"
-            )
-        else:
-            weight_block = (
-                "⚖️ Вес: не указан\n"
-                "🚚 Доставка: уточняется "
-                "после взвешивания\n"
-            )
-
-    # =====================================================
-    # ФИНАЛЬНОЕ СООБЩЕНИЕ
-    # =====================================================
+        weight_block = (
+            "⚖️ Вес: не указан\n"
+            "🚚 Доставка: уточняется "
+            "после взвешивания"
+        )
 
     await message.answer(
         f"✅ Товар №{len(cart)} добавлен\n\n"
         f"Стоимость товара: "
         f"{cost:.0f} ₽\n\n"
-        f"{weight_block}\n"
+        f"{weight_block}\n\n"
         f"💰 К оплате сейчас: "
         f"{total_item_cost:.0f} ₽\n\n"
         f"Общая сумма заказа: "
         f"{total:.0f} ₽",
-        reply_markup=after_item_added_kb(),
+        reply_markup=after_item_added_kb()
     )
 
     await message.answer(
