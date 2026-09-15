@@ -306,5 +306,253 @@ async def get_cart(user_id: int):
             """
             SELECT *
             FROM cart_items
-            WHERE user_id =_
+            WHERE user_id = ?
+            ORDER BY id
+            """,
+            (user_id,),
+        )
+
+        return await cur.fetchall()
+
+
+async def get_cart_total(user_id: int) -> float:
+    """
+    Считает текущую сумму заказа.
+
+    Для AI-веса доставка равна 0,
+    поэтому примерный вес никак не влияет
+    на сумму к оплате.
+    """
+
+    items = await get_cart(user_id)
+
+    return round(
+        sum(
+            i["cost_rub"]
+            for i in items
+        ),
+        2,
+    )
+
+
+async def delete_cart_item(
+    item_id: int,
+    user_id: int,
+):
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        await db.execute(
+            """
+            DELETE FROM cart_items
+            WHERE id = ?
+            AND user_id = ?
+            """,
+            (
+                item_id,
+                user_id,
+            ),
+        )
+
+        await db.commit()
+
+
+async def clear_cart(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        await db.execute(
+            """
+            DELETE FROM cart_items
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+
+        await db.commit()
+
+
+async def get_cart_item(
+    item_id: int,
+    user_id: int,
+):
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        db.row_factory = aiosqlite.Row
+
+        cur = await db.execute(
+            """
+            SELECT *
+            FROM cart_items
+            WHERE id = ?
+            AND user_id = ?
+            """,
+            (
+                item_id,
+                user_id,
+            ),
+        )
+
+        return await cur.fetchone()
+
+
+# ============================================================
+# ORDERS
+# ============================================================
+
+async def create_order_from_cart(
+    user_id: int,
+) -> int | None:
+
+    items = await get_cart(user_id)
+
+    if not items:
+        return None
+
+    # В сумму заказа попадает только cost_rub.
+    # AI-примерный вес и доставка по нему НЕ учитываются.
+    total = round(
+        sum(
+            i["cost_rub"]
+            for i in items
+        ),
+        2,
+    )
+
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        cur = await db.execute(
+            """
+            INSERT INTO orders
+            (
+                user_id,
+                status,
+                total_rub,
+                created_at
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                "Новая",
+                total,
+                datetime.utcnow().isoformat(),
+            ),
+        )
+
+        order_id = cur.lastrowid
+
+        for i in items:
+
+            await db.execute(
+                """
+                INSERT INTO order_items
+                (
+                    order_id,
+                    link,
+                    photo_id,
+                    price_yuan,
+                    quantity,
+                    size,
+                    weight_kg,
+                    weight_min_kg,
+                    weight_max_kg,
+                    weight_estimated,
+                    shipping_rub,
+                    cost_rub
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order_id,
+                    i["link"],
+                    i["photo_id"],
+                    i["price_yuan"],
+                    i["quantity"],
+                    i["size"],
+                    i["weight_kg"],
+                    i["weight_min_kg"],
+                    i["weight_max_kg"],
+                    i["weight_estimated"],
+                    i["shipping_rub"],
+                    i["cost_rub"],
+                ),
+            )
+
+        await db.commit()
+
+    await clear_cart(user_id)
+
+    return order_id
+
+
+async def get_order_items(order_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        db.row_factory = aiosqlite.Row
+
+        cur = await db.execute(
+            """
+            SELECT *
+            FROM order_items
+            WHERE order_id = ?
+            """,
+            (order_id,),
+        )
+
+        return await cur.fetchall()
+
+
+async def get_user_orders(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        db.row_factory = aiosqlite.Row
+
+        cur = await db.execute(
+            """
+            SELECT *
+            FROM orders
+            WHERE user_id = ?
+            ORDER BY id DESC
+            """,
+            (user_id,),
+        )
+
+        return await cur.fetchall()
+
+
+async def get_order(order_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        db.row_factory = aiosqlite.Row
+
+        cur = await db.execute(
+            """
+            SELECT *
+            FROM orders
+            WHERE id = ?
+            """,
+            (order_id,),
+        )
+
+        return await cur.fetchone()
+
+
+async def set_order_status(
+    order_id: int,
+    status: str,
+):
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        await db.execute(
+            """
+            UPDATE orders
+            SET status = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                order_id,
+            ),
+        )
+
+        await db.commit()
 ```
