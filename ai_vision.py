@@ -1,31 +1,18 @@
 import base64
 import json
-import os
+import re
 
 import aiohttp
 
+from config import (
+    OPENAI_API_KEY,
+    OPENAI_MODEL
+)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 
-
-async def estimate_weight_from_image(image_bytes: bytes) -> dict:
-    """
-    Оценивает примерный вес товара по фотографии.
-
-    ВАЖНО:
-    AI-вес используется только как ориентир.
-    Он НЕ используется для расчёта доставки.
-
-    Возвращает:
-    {
-        "product_type": "...",
-        "min_kg": 0.2,
-        "max_kg": 0.5,
-        "confidence": "low|medium|high",
-        "note": "..."
-    }
-    """
+async def estimate_weight_from_image(
+    image_bytes: bytes
+) -> dict:
 
     if not OPENAI_API_KEY:
         raise RuntimeError(
@@ -39,36 +26,36 @@ async def estimate_weight_from_image(image_bytes: bytes) -> dict:
 
     image_base64 = base64.b64encode(
         image_bytes
-    ).decode("utf-8")
+    ).decode("ascii")
+
+    data_url = (
+        "data:image/jpeg;base64,"
+        + image_base64
+    )
 
     prompt = """
-Ты анализируешь фотографию товара для интернет-магазина.
+Проанализируй фотографию товара.
 
-Твоя задача — определить тип товара и ОЦЕНИТЬ его примерный
-вес без упаковки.
+Нужно определить тип товара и оценить
+примерный вес ОДНОЙ штуки без упаковки.
 
-КРИТИЧЕСКИ ВАЖНО:
+ВАЖНО:
 
-1. Это только приблизительная оценка по фотографии.
-2. Нельзя выдавать ложную точность.
-3. Всегда указывай ДИАПАЗОН веса.
-4. Если определить вес сложно — делай диапазон шире.
-5. Вес указывай БЕЗ упаковки.
-6. Если на фото несколько одинаковых товаров — оцени вес ОДНОЙ штуки.
-7. Учитывай:
-   - тип товара;
-   - материал;
-   - примерный размер;
-   - конструкцию;
-   - толщину;
-   - наличие металлических деталей;
-   - визуальную плотность материала.
-8. Не учитывай стоимость товара.
-9. Не пытайся определить вес по цене.
-10. Не используй упаковку в оценке.
-11. Не придумывай точные характеристики, которых не видно.
-12. Если масштаб фотографии неизвестен, учитывай это и расширяй диапазон.
-13. Ответ должен быть ТОЛЬКО JSON без Markdown и без ```.
+- Это только приблизительная оценка.
+- Не выдавай ложную точность.
+- Всегда используй диапазон.
+- Если определить вес сложно — расширь диапазон.
+- Если на фото несколько одинаковых товаров —
+  оцени вес одной штуки.
+- Учитывай материал, конструкцию,
+  примерный размер и плотность.
+- Если масштаб неизвестен — учитывай это.
+- Не учитывай упаковку.
+- Не определяй вес по цене.
+- Не придумывай характеристики,
+  которых не видно.
+- Ответ только JSON.
+- Не используй markdown.
 
 Формат:
 
@@ -77,36 +64,21 @@ async def estimate_weight_from_image(image_bytes: bytes) -> dict:
   "min_kg": 0.2,
   "max_kg": 0.5,
   "confidence": "low",
-  "note": "краткое объяснение оценки на русском языке"
+  "note": "краткое объяснение на русском"
 }
 
-Правила для confidence:
+confidence может быть только:
 
-"high" — товар хорошо виден, его тип и примерный размер понятны.
+low
+medium
+high
 
-"medium" — товар понятен, но есть неопределённость с размером,
-материалом или конструкцией.
+min_kg > 0
+max_kg > 0
+max_kg >= min_kg
 
-"low" — по фотографии сложно надёжно определить вес.
-
-Правила для веса:
-
-- min_kg > 0
-- max_kg > 0
-- max_kg >= min_kg
-- используй килограммы
-- не указывай заведомо сверхточный диапазон
-  вроде 0.437–0.451 кг
-- диапазон должен соответствовать реальной неопределённости
-  оценки
-
-Например, лучше:
-0.4–0.7 кг
-
-чем:
-0.53–0.56 кг
-
-если точный размер и материал неизвестны.
+Не используй псевдоточность
+вроде 0.437–0.451 кг.
 """
 
     payload = {
@@ -121,10 +93,7 @@ async def estimate_weight_from_image(image_bytes: bytes) -> dict:
                     },
                     {
                         "type": "input_image",
-                        "image_url": (
-                            "data:image/jpeg;base64,"
-                            f"{image_base64}"
-                        ),
+                        "image_url": data_url,
                         "detail": "low",
                     },
                 ],
@@ -151,133 +120,118 @@ async def estimate_weight_from_image(image_bytes: bytes) -> dict:
             json=payload,
         ) as response:
 
-            response_text = await response.text()
+            response_text = (
+                await response.text()
+            )
 
             if response.status != 200:
                 raise RuntimeError(
-                    "OpenAI API error "
+                    f"OpenAI API error "
                     f"{response.status}: "
                     f"{response_text[:500]}"
                 )
 
             try:
-                data = json.loads(
+                api_data = json.loads(
                     response_text
                 )
-            except json.JSONDecodeError as e:
-                raise RuntimeError(
-                    "OpenAI returned invalid JSON response"
-                ) from e
 
-    # -----------------------------------------------------
-    # Достаём текст из Responses API
-    # -----------------------------------------------------
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "OpenAI returned invalid JSON"
+                ) from exc
 
     result_text = ""
 
-    for output in data.get(
+    for output in api_data.get(
         "output",
         []
     ):
+
         for content in output.get(
             "content",
             []
         ):
+
             if content.get(
                 "type"
             ) == "output_text":
 
-                result_text += (
-                    content.get(
-                        "text",
-                        ""
-                    )
+                result_text += content.get(
+                    "text",
+                    ""
                 )
+
+    result_text = result_text.strip()
 
     if not result_text:
         raise RuntimeError(
             "OpenAI returned an empty response"
         )
 
+    # Убираем ```json ... ```
+    result_text = re.sub(
+        r"^```(?:json)?\s*",
+        "",
+        result_text
+    )
+
+    result_text = re.sub(
+        r"\s*```$",
+        "",
+        result_text
+    )
+
     result_text = result_text.strip()
 
-    # -----------------------------------------------------
-    # Убираем Markdown, если модель всё-таки
-    # вернула ```json ... ```
-    # -----------------------------------------------------
+    # Если модель добавила текст до JSON
+    if not result_text.startswith("{"):
 
-    if result_text.startswith("```"):
-
-        if result_text.startswith(
-            "```json"
-        ):
-            result_text = result_text[
-                len("```json"):
-            ]
-        else:
-            result_text = result_text[
-                len("```"):
-            ]
-
-        if result_text.endswith(
-            "```"
-        ):
-            result_text = result_text[
-                :-3
-            ]
-
-        result_text = result_text.strip()
-
-    # -----------------------------------------------------
-    # Иногда модель может вернуть текст до/после JSON.
-    # Пытаемся найти объект JSON.
-    # -----------------------------------------------------
-
-    if not (
-        result_text.startswith("{")
-        and result_text.endswith("}")
-    ):
         start = result_text.find("{")
         end = result_text.rfind("}")
 
         if start != -1 and end != -1:
+
             result_text = result_text[
                 start:end + 1
             ]
 
     try:
+
         result = json.loads(
             result_text
         )
-    except json.JSONDecodeError as e:
+
+    except json.JSONDecodeError as exc:
+
         raise RuntimeError(
             "AI returned invalid JSON: "
-            f"{result_text[:500]}"
-        ) from e
-
-    # -----------------------------------------------------
-    # Проверяем вес
-    # -----------------------------------------------------
+            + result_text[:500]
+        ) from exc
 
     try:
+
         min_kg = float(
             result["min_kg"]
         )
+
         max_kg = float(
             result["max_kg"]
         )
+
     except (
         KeyError,
         TypeError,
         ValueError
-    ) as e:
+    ) as exc:
+
         raise ValueError(
             "AI returned invalid weight values"
-        ) from e
+        ) from exc
 
     if min_kg <= 0 or max_kg <= 0:
         raise ValueError(
-            "Invalid weight returned by AI"
+            "AI returned invalid weight range"
         )
 
     if max_kg < min_kg:
@@ -286,18 +240,10 @@ async def estimate_weight_from_image(image_bytes: bytes) -> dict:
             min_kg
         )
 
-    # -----------------------------------------------------
-    # Защита от совсем нереалистичных значений
-    # -----------------------------------------------------
-
-    if min_kg > 500 or max_kg > 500:
+    if max_kg > 500:
         raise ValueError(
             "AI returned unrealistic weight"
         )
-
-    # -----------------------------------------------------
-    # Нормализуем confidence
-    # -----------------------------------------------------
 
     confidence = result.get(
         "confidence",
@@ -307,43 +253,35 @@ async def estimate_weight_from_image(image_bytes: bytes) -> dict:
     if confidence not in (
         "low",
         "medium",
-        "high",
+        "high"
     ):
         confidence = "low"
 
-    product_type = result.get(
-        "product_type",
-        "Товар"
-    )
-
-    note = result.get(
-        "note",
-        "Вес определён приблизительно "
-        "по фотографии."
-    )
-
-    # -----------------------------------------------------
-    # Финальный результат
-    # -----------------------------------------------------
-
     return {
         "product_type": str(
-            product_type
+            result.get(
+                "product_type",
+                "Товар"
+            )
         )[:100],
 
         "min_kg": round(
             min_kg,
-            3
+            2
         ),
 
         "max_kg": round(
             max_kg,
-            3
+            2
         ),
 
         "confidence": confidence,
 
         "note": str(
-            note
+            result.get(
+                "note",
+                "Вес определён приблизительно "
+                "по фотографии."
+            )
         )[:300],
     }
