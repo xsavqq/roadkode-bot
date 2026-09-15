@@ -47,3 +47,5 @@ def yuan_rate_text() -> str:
         f"Бот рассчитывает стоимость товара по этому курсу и добавляет комиссию сервиса.\n\n"
         f"📦 Доставка: {PRICE_PER_KG:.0f} ₽ / кг"
     )
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
