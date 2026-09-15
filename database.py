@@ -554,4 +554,3 @@ async def set_order_status(
         )
 
         await db.commit()
-```
