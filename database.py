@@ -1,4 +1,3 @@
-```python
 import aiosqlite
 from datetime import datetime
 from config import DB_PATH
