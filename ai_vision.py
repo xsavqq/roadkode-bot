@@ -6,58 +6,81 @@ import aiohttp
 
 from config import (
     OPENAI_API_KEY,
-    OPENAI_MODEL
+    OPENAI_MODEL,
 )
 
 
+# =========================================================
+# AI ОЦЕНКА ВЕСА
+# =========================================================
+
 async def estimate_weight_from_image(
-    image_bytes: bytes
+    image_bytes: bytes,
 ) -> dict:
 
+    """
+    Анализирует фотографию товара
+    и возвращает приблизительный диапазон веса.
+    """
+
     if not OPENAI_API_KEY:
+
         raise RuntimeError(
             "OPENAI_API_KEY is not configured"
         )
 
     if not image_bytes:
+
         raise ValueError(
             "Image is empty"
         )
 
-    image_base64 = base64.b64encode(
-        image_bytes
-    ).decode("ascii")
+    # -----------------------------------------------------
+    # КАРТИНКА → BASE64
+    # -----------------------------------------------------
+
+    image_base64 = (
+        base64.b64encode(
+            image_bytes
+        ).decode("ascii")
+    )
 
     data_url = (
         "data:image/jpeg;base64,"
         + image_base64
     )
 
+    # -----------------------------------------------------
+    # PROMPT
+    # -----------------------------------------------------
+
     prompt = """
-Проанализируй фотографию товара.
 
-Нужно определить тип товара и оценить
-примерный вес ОДНОЙ штуки без упаковки.
+Проанализируй фотографию товара и оцени
+его примерный вес БЕЗ упаковки.
 
-ВАЖНО:
+ВАЖНЫЕ ПРАВИЛА:
 
 - Это только приблизительная оценка.
-- Не выдавай ложную точность.
-- Всегда используй диапазон.
-- Если определить вес сложно — расширь диапазон.
+- Никогда не выдавай ложную точность.
+- Всегда указывай диапазон веса.
+- Если определить вес сложно — делай диапазон шире.
 - Если на фото несколько одинаковых товаров —
-  оцени вес одной штуки.
-- Учитывай материал, конструкцию,
-  примерный размер и плотность.
-- Если масштаб неизвестен — учитывай это.
+  оцени вес ОДНОЙ штуки.
+- Учитывай тип товара.
+- Учитывай материал, если он визуально понятен.
+- Учитывай примерный размер и конструкцию.
+- Если масштаб фотографии неизвестен —
+  учитывай эту неопределённость.
 - Не учитывай упаковку.
-- Не определяй вес по цене.
+- Не пытайся определить вес по цене.
 - Не придумывай характеристики,
-  которых не видно.
-- Ответ только JSON.
-- Не используй markdown.
+  которых не видно на фотографии.
+- Не используй псевдоточность.
+- Ответ должен быть ТОЛЬКО JSON.
+- Не добавляй markdown.
 
-Формат:
+Формат ответа:
 
 {
   "product_type": "краткое название товара",
@@ -67,33 +90,46 @@ async def estimate_weight_from_image(
   "note": "краткое объяснение на русском"
 }
 
-confidence может быть только:
+confidence:
+только low, medium или high.
 
-low
-medium
-high
+min_kg:
+положительное число.
 
-min_kg > 0
-max_kg > 0
-max_kg >= min_kg
+max_kg:
+положительное число,
+не меньше min_kg.
 
-Не используй псевдоточность
-вроде 0.437–0.451 кг.
+Если информации мало,
+лучше дать широкий диапазон,
+чем делать вид, что вес известен точно.
 """
 
+    # -----------------------------------------------------
+    # OPENAI REQUEST
+    # -----------------------------------------------------
+
     payload = {
+
         "model": OPENAI_MODEL,
+
         "input": [
+
             {
                 "role": "user",
+
                 "content": [
+
                     {
                         "type": "input_text",
                         "text": prompt,
                     },
+
                     {
                         "type": "input_image",
+
                         "image_url": data_url,
+
                         "detail": "low",
                     },
                 ],
@@ -105,19 +141,29 @@ max_kg >= min_kg
         total=45
     )
 
+    # -----------------------------------------------------
+    # ЗАПРОС
+    # -----------------------------------------------------
+
     async with aiohttp.ClientSession(
         timeout=timeout
     ) as session:
 
         async with session.post(
+
             "https://api.openai.com/v1/responses",
+
             headers={
-                "Authorization": (
-                    f"Bearer {OPENAI_API_KEY}"
-                ),
-                "Content-Type": "application/json",
+
+                "Authorization":
+                    f"Bearer {OPENAI_API_KEY}",
+
+                "Content-Type":
+                    "application/json",
             },
+
             json=payload,
+
         ) as response:
 
             response_text = (
@@ -125,76 +171,116 @@ max_kg >= min_kg
             )
 
             if response.status != 200:
+
                 raise RuntimeError(
-                    f"OpenAI API error "
+
+                    "OpenAI API error "
                     f"{response.status}: "
                     f"{response_text[:500]}"
                 )
 
             try:
+
                 api_data = json.loads(
                     response_text
                 )
 
             except json.JSONDecodeError as exc:
+
                 raise RuntimeError(
                     "OpenAI returned invalid JSON"
                 ) from exc
+
+    # -----------------------------------------------------
+    # ДОСТАЁМ ТЕКСТ
+    # -----------------------------------------------------
 
     result_text = ""
 
     for output in api_data.get(
         "output",
-        []
+        [],
     ):
 
         for content in output.get(
             "content",
-            []
+            [],
         ):
 
-            if content.get(
-                "type"
-            ) == "output_text":
+            if (
+                content.get("type")
+                == "output_text"
+            ):
 
-                result_text += content.get(
-                    "text",
-                    ""
+                result_text += (
+                    content.get(
+                        "text",
+                        "",
+                    )
                 )
 
-    result_text = result_text.strip()
+    result_text = (
+        result_text.strip()
+    )
 
     if not result_text:
+
         raise RuntimeError(
             "OpenAI returned an empty response"
         )
 
-    # Убираем ```json ... ```
+    # -----------------------------------------------------
+    # УБИРАЕМ ```JSON
+    # -----------------------------------------------------
+
     result_text = re.sub(
+
         r"^```(?:json)?\s*",
+
         "",
-        result_text
-    )
+
+        result_text,
+    ).strip()
 
     result_text = re.sub(
+
         r"\s*```$",
+
         "",
-        result_text
-    )
 
-    result_text = result_text.strip()
+        result_text,
+    ).strip()
 
-    # Если модель добавила текст до JSON
-    if not result_text.startswith("{"):
+    # -----------------------------------------------------
+    # ЕСЛИ AI ДОБАВИЛ ТЕКСТ
+    # -----------------------------------------------------
 
-        start = result_text.find("{")
-        end = result_text.rfind("}")
+    if not result_text.startswith(
+        "{"
+    ):
 
-        if start != -1 and end != -1:
+        start = (
+            result_text.find("{")
+        )
 
-            result_text = result_text[
-                start:end + 1
-            ]
+        end = (
+            result_text.rfind("}")
+        )
+
+        if (
+            start != -1
+            and end != -1
+        ):
+
+            result_text = (
+                result_text[
+                    start:end + 1
+                ]
+            )
+
+    # -----------------------------------------------------
+    # JSON
+    # -----------------------------------------------------
 
     try:
 
@@ -205,9 +291,15 @@ max_kg >= min_kg
     except json.JSONDecodeError as exc:
 
         raise RuntimeError(
+
             "AI returned invalid JSON: "
-            + result_text[:500]
+            f"{result_text[:500]}"
+
         ) from exc
+
+    # -----------------------------------------------------
+    # ВЕС
+    # -----------------------------------------------------
 
     try:
 
@@ -222,66 +314,90 @@ max_kg >= min_kg
     except (
         KeyError,
         TypeError,
-        ValueError
+        ValueError,
     ) as exc:
 
         raise ValueError(
             "AI returned invalid weight values"
         ) from exc
 
-    if min_kg <= 0 or max_kg <= 0:
+    if (
+        min_kg <= 0
+        or max_kg <= 0
+    ):
+
         raise ValueError(
             "AI returned invalid weight range"
         )
 
     if max_kg < min_kg:
+
         min_kg, max_kg = (
             max_kg,
-            min_kg
+            min_kg,
         )
 
+    # -----------------------------------------------------
+    # ЗАЩИТА ОТ БРЕДА
+    # -----------------------------------------------------
+
     if max_kg > 500:
+
         raise ValueError(
             "AI returned unrealistic weight"
         )
 
+    # -----------------------------------------------------
+    # CONFIDENCE
+    # -----------------------------------------------------
+
     confidence = result.get(
         "confidence",
-        "low"
+        "low",
     )
 
     if confidence not in (
         "low",
         "medium",
-        "high"
+        "high",
     ):
+
         confidence = "low"
 
+    # -----------------------------------------------------
+    # РЕЗУЛЬТАТ
+    # -----------------------------------------------------
+
     return {
+
         "product_type": str(
             result.get(
-                "product_type",
-                "Товар"
+                "product_type"
             )
+            or "Товар"
         )[:100],
 
         "min_kg": round(
             min_kg,
-            2
+            2,
         ),
 
         "max_kg": round(
             max_kg,
-            2
+            2,
         ),
 
         "confidence": confidence,
 
         "note": str(
+
             result.get(
-                "note",
-                "Вес определён приблизительно "
-                "по фотографии."
+                "note"
             )
+            or
+            "Вес определён "
+            "приблизительно "
+            "по фотографии."
+
         )[:300],
     }
