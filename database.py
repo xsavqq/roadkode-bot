@@ -2,14 +2,15 @@ import aiosqlite
 from datetime import datetime
 from config import DB_PATH
 
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    user_id       INTEGER PRIMARY KEY,
-    username      TEXT,
-    full_name     TEXT,
-    phone         TEXT,
-    client_code   TEXT UNIQUE,
-    created_at    TEXT
+    user_id     INTEGER PRIMARY KEY,
+    username    TEXT,
+    full_name   TEXT,
+    phone       TEXT,
+    client_code TEXT UNIQUE,
+    created_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cart_items (
@@ -59,7 +60,9 @@ async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
 
-        migrations = (
+        # Миграция существующей базы.
+        # Если колонка уже есть — просто пропускаем ошибку.
+        for statement in (
             "ALTER TABLE users ADD COLUMN client_code TEXT",
             "ALTER TABLE cart_items ADD COLUMN weight_min_kg REAL",
             "ALTER TABLE cart_items ADD COLUMN weight_max_kg REAL",
@@ -67,9 +70,7 @@ async def init_db():
             "ALTER TABLE order_items ADD COLUMN weight_min_kg REAL",
             "ALTER TABLE order_items ADD COLUMN weight_max_kg REAL",
             "ALTER TABLE order_items ADD COLUMN weight_estimated INTEGER DEFAULT 0",
-        )
-
-        for statement in migrations:
+        ):
             try:
                 await db.execute(statement)
             except Exception as exc:
@@ -79,19 +80,33 @@ async def init_db():
         await db.commit()
 
 
-async def ensure_user(user_id: int, username: str, full_name: str):
+async def ensure_user(
+    user_id: int,
+    username: str,
+    full_name: str,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT user_id FROM users WHERE user_id = ?",
             (user_id,),
         )
+
         row = await cur.fetchone()
 
         if row is None:
             await db.execute(
-                """INSERT INTO users
-                   (user_id, username, full_name, phone, client_code, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """
+                INSERT INTO users
+                (
+                    user_id,
+                    username,
+                    full_name,
+                    phone,
+                    client_code,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
                 (
                     user_id,
                     username,
@@ -103,32 +118,63 @@ async def ensure_user(user_id: int, username: str, full_name: str):
             )
         else:
             await db.execute(
-                """UPDATE users
-                   SET username = ?, full_name = ?
-                   WHERE user_id = ?""",
-                (username, full_name, user_id),
+                """
+                UPDATE users
+                SET username = ?,
+                    full_name = ?
+                WHERE user_id = ?
+                """,
+                (
+                    username,
+                    full_name,
+                    user_id,
+                ),
             )
 
         await db.commit()
 
 
-async def get_or_create_client_code(user_id: int) -> str:
-    """Возвращает постоянный код клиента вида RK-0001."""
+async def get_or_create_client_code(
+    user_id: int,
+) -> str:
+    """
+    Возвращает постоянный код клиента:
+
+    RK-0001
+    RK-0002
+    RK-0003
+    ...
+    """
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
         cur = await db.execute(
-            "SELECT client_code FROM users WHERE user_id = ?",
+            """
+            SELECT client_code
+            FROM users
+            WHERE user_id = ?
+            """,
             (user_id,),
         )
+
         user = await cur.fetchone()
 
+        # Если пользователя ещё нет — создаём.
         if user is None:
             await db.execute(
-                """INSERT INTO users
-                   (user_id, username, full_name, phone, client_code, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """
+                INSERT INTO users
+                (
+                    user_id,
+                    username,
+                    full_name,
+                    phone,
+                    client_code,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
                 (
                     user_id,
                     "",
@@ -138,14 +184,26 @@ async def get_or_create_client_code(user_id: int) -> str:
                     datetime.utcnow().isoformat(),
                 ),
             )
+
             await db.commit()
 
-        if user and user["client_code"]:
-            return user["client_code"]
+            client_code = None
+        else:
+            client_code = user["client_code"]
 
+        # Если код уже существует — возвращаем его.
+        if client_code:
+            return client_code
+
+        # Ищем максимальный существующий номер.
         cur = await db.execute(
-            "SELECT client_code FROM users WHERE client_code IS NOT NULL"
+            """
+            SELECT client_code
+            FROM users
+            WHERE client_code IS NOT NULL
+            """
         )
+
         rows = await cur.fetchall()
 
         max_number = 0
@@ -156,15 +214,27 @@ async def get_or_create_client_code(user_id: int) -> str:
             if code.startswith("RK-"):
                 try:
                     number = int(code[3:])
-                    max_number = max(max_number, number)
+                    max_number = max(
+                        max_number,
+                        number,
+                    )
                 except ValueError:
                     pass
 
-        client_code = f"RK-{max_number + 1:04d}"
+        new_number = max_number + 1
+
+        client_code = f"RK-{new_number:04d}"
 
         await db.execute(
-            "UPDATE users SET client_code = ? WHERE user_id = ?",
-            (client_code, user_id),
+            """
+            UPDATE users
+            SET client_code = ?
+            WHERE user_id = ?
+            """,
+            (
+                client_code,
+                user_id,
+            ),
         )
 
         await db.commit()
@@ -177,21 +247,35 @@ async def get_user(user_id: int):
         db.row_factory = aiosqlite.Row
 
         cur = await db.execute(
-            "SELECT * FROM users WHERE user_id = ?",
+            """
+            SELECT *
+            FROM users
+            WHERE user_id = ?
+            """,
             (user_id,),
         )
 
         return await cur.fetchone()
 
 
-async def set_phone(user_id: int, phone: str):
+async def set_phone(
+    user_id: int,
+    phone: str,
+):
     # Оставлено для совместимости со старой базой.
-    # Новый личный кабинет телефон не запрашивает.
+    # Новый личный кабинет телефон НЕ запрашивает.
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE users SET phone = ? WHERE user_id = ?",
-            (phone, user_id),
+            """
+            UPDATE users
+            SET phone = ?
+            WHERE user_id = ?
+            """,
+            (
+                phone,
+                user_id,
+            ),
         )
 
         await db.commit()
@@ -213,11 +297,25 @@ async def add_cart_item(
 ):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO cart_items
-               (user_id, link, photo_id, price_yuan, quantity, size,
-                weight_kg, weight_min_kg, weight_max_kg, weight_estimated,
-                shipping_rub, cost_rub, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """
+            INSERT INTO cart_items
+            (
+                user_id,
+                link,
+                photo_id,
+                price_yuan,
+                quantity,
+                size,
+                weight_kg,
+                weight_min_kg,
+                weight_max_kg,
+                weight_estimated,
+                shipping_rub,
+                cost_rub,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             (
                 user_id,
                 link,
@@ -243,27 +341,47 @@ async def get_cart(user_id: int):
         db.row_factory = aiosqlite.Row
 
         cur = await db.execute(
-            "SELECT * FROM cart_items WHERE user_id = ? ORDER BY id",
+            """
+            SELECT *
+            FROM cart_items
+            WHERE user_id = ?
+            ORDER BY id
+            """,
             (user_id,),
         )
 
         return await cur.fetchall()
 
 
-async def get_cart_total(user_id: int) -> float:
+async def get_cart_total(
+    user_id: int,
+) -> float:
     items = await get_cart(user_id)
 
     return round(
-        sum(i["cost_rub"] for i in items),
+        sum(
+            item["cost_rub"]
+            for item in items
+        ),
         2,
     )
 
 
-async def delete_cart_item(item_id: int, user_id: int):
+async def delete_cart_item(
+    item_id: int,
+    user_id: int,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "DELETE FROM cart_items WHERE id = ? AND user_id = ?",
-            (item_id, user_id),
+            """
+            DELETE FROM cart_items
+            WHERE id = ?
+            AND user_id = ?
+            """,
+            (
+                item_id,
+                user_id,
+            ),
         )
 
         await db.commit()
@@ -272,44 +390,72 @@ async def delete_cart_item(item_id: int, user_id: int):
 async def clear_cart(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "DELETE FROM cart_items WHERE user_id = ?",
+            """
+            DELETE FROM cart_items
+            WHERE user_id = ?
+            """,
             (user_id,),
         )
 
         await db.commit()
 
 
-async def get_cart_item(item_id: int, user_id: int):
+async def get_cart_item(
+    item_id: int,
+    user_id: int,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
         cur = await db.execute(
-            "SELECT * FROM cart_items WHERE id = ? AND user_id = ?",
-            (item_id, user_id),
+            """
+            SELECT *
+            FROM cart_items
+            WHERE id = ?
+            AND user_id = ?
+            """,
+            (
+                item_id,
+                user_id,
+            ),
         )
 
         return await cur.fetchone()
 
 
-async def create_order_from_cart(user_id: int) -> int | None:
+async def create_order_from_cart(
+    user_id: int,
+) -> int | None:
+
     items = await get_cart(user_id)
 
     if not items:
         return None
 
-    # Код закрепляется за клиентом при первом оформлении заказа.
+    # При первом оформлении заказа
+    # автоматически закрепляем код клиента.
     await get_or_create_client_code(user_id)
 
     total = round(
-        sum(i["cost_rub"] for i in items),
+        sum(
+            item["cost_rub"]
+            for item in items
+        ),
         2,
     )
 
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            """INSERT INTO orders
-               (user_id, status, total_rub, created_at)
-               VALUES (?, ?, ?, ?)""",
+            """
+            INSERT INTO orders
+            (
+                user_id,
+                status,
+                total_rub,
+                created_at
+            )
+            VALUES (?, ?, ?, ?)
+            """,
             (
                 user_id,
                 "Новая",
@@ -320,26 +466,39 @@ async def create_order_from_cart(user_id: int) -> int | None:
 
         order_id = cur.lastrowid
 
-        for i in items:
+        for item in items:
             await db.execute(
-                """INSERT INTO order_items
-                   (order_id, link, photo_id, price_yuan, quantity, size,
-                    weight_kg, weight_min_kg, weight_max_kg,
-                    weight_estimated, shipping_rub, cost_rub)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """
+                INSERT INTO order_items
                 (
                     order_id,
-                    i["link"],
-                    i["photo_id"],
-                    i["price_yuan"],
-                    i["quantity"],
-                    i["size"],
-                    i["weight_kg"],
-                    i["weight_min_kg"],
-                    i["weight_max_kg"],
-                    i["weight_estimated"],
-                    i["shipping_rub"],
-                    i["cost_rub"],
+                    link,
+                    photo_id,
+                    price_yuan,
+                    quantity,
+                    size,
+                    weight_kg,
+                    weight_min_kg,
+                    weight_max_kg,
+                    weight_estimated,
+                    shipping_rub,
+                    cost_rub
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order_id,
+                    item["link"],
+                    item["photo_id"],
+                    item["price_yuan"],
+                    item["quantity"],
+                    item["size"],
+                    item["weight_kg"],
+                    item["weight_min_kg"],
+                    item["weight_max_kg"],
+                    item["weight_estimated"],
+                    item["shipping_rub"],
+                    item["cost_rub"],
                 ),
             )
 
@@ -350,47 +509,76 @@ async def create_order_from_cart(user_id: int) -> int | None:
     return order_id
 
 
-async def get_order_items(order_id: int):
+async def get_order_items(
+    order_id: int,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
         cur = await db.execute(
-            "SELECT * FROM order_items WHERE order_id = ?",
+            """
+            SELECT *
+            FROM order_items
+            WHERE order_id = ?
+            """,
             (order_id,),
         )
 
         return await cur.fetchall()
 
 
-async def get_user_orders(user_id: int):
+async def get_user_orders(
+    user_id: int,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
         cur = await db.execute(
-            "SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC",
+            """
+            SELECT *
+            FROM orders
+            WHERE user_id = ?
+            ORDER BY id DESC
+            """,
             (user_id,),
         )
 
         return await cur.fetchall()
 
 
-async def get_order(order_id: int):
+async def get_order(
+    order_id: int,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
         cur = await db.execute(
-            "SELECT * FROM orders WHERE id = ?",
+            """
+            SELECT *
+            FROM orders
+            WHERE id = ?
+            """,
             (order_id,),
         )
 
         return await cur.fetchone()
 
 
-async def set_order_status(order_id: int, status: str):
+async def set_order_status(
+    order_id: int,
+    status: str,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE orders SET status = ? WHERE id = ?",
-            (status, order_id),
+            """
+            UPDATE orders
+            SET status = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                order_id,
+            ),
         )
 
         await db.commit()
