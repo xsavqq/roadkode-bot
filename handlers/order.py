@@ -8,11 +8,40 @@ import database as db
 from ai_vision import estimate_weight_from_image
 from config import calc_cost, yuan_rate_text
 from states import OrderStates
-from keyboards import after_item_added_kb, main_menu, skip_kb
+
+from keyboards import (
+    after_item_added_kb,
+    main_menu,
+    skip_kb,
+    cancel_kb,
+    skip_cancel_kb,
+)
 
 
 router = Router()
 
+
+# ============================================================
+# ОТМЕНА ОФОРМЛЕНИЯ
+# ============================================================
+
+@router.message(F.text == "❌ Отмена")
+async def cancel_order(
+    message: Message,
+    state: FSMContext,
+):
+    await state.clear()
+
+    await message.answer(
+        "❌ Оформление заказа отменено.\n\n"
+        "Выберите действие.",
+        reply_markup=main_menu,
+    )
+
+
+# ============================================================
+# НАЧАЛО НОВОГО ТОВАРА
+# ============================================================
 
 async def start_new_item(
     target,
@@ -32,13 +61,17 @@ async def start_new_item(
         "отправьте символ -"
     )
 
-    if isinstance(target, CallbackQuery):
+    if isinstance(
+        target,
+        CallbackQuery,
+    ):
         await target.message.answer(
             rate_text
         )
 
         await target.message.answer(
-            link_text
+            link_text,
+            reply_markup=cancel_kb,
         )
 
         await target.answer()
@@ -49,9 +82,14 @@ async def start_new_item(
         )
 
         await target.answer(
-            link_text
+            link_text,
+            reply_markup=cancel_kb,
         )
 
+
+# ============================================================
+# КНОПКА "НОВЫЙ ЗАКАЗ"
+# ============================================================
 
 @router.message(
     F.text == "🛒 Новый заказ"
@@ -66,6 +104,10 @@ async def new_order(
     )
 
 
+# ============================================================
+# ДОБАВИТЬ ТОВАР ИЗ КОРЗИНЫ
+# ============================================================
+
 @router.callback_query(
     F.data == "add_item"
 )
@@ -78,6 +120,10 @@ async def add_item_cb(
         state,
     )
 
+
+# ============================================================
+# ПОЛУЧИЛИ ССЫЛКУ
+# ============================================================
 
 @router.message(
     OrderStates.waiting_link,
@@ -98,10 +144,13 @@ async def got_link_text(
     await state.update_data(
         link=link,
         photo_id=None,
+
         weight_estimated=False,
+
         estimated_weight_min=None,
         estimated_weight_max=None,
         estimated_weight_mid=None,
+
         estimated_product_type=None,
         estimated_confidence=None,
         estimated_note=None,
@@ -112,9 +161,14 @@ async def got_link_text(
     )
 
     await message.answer(
-        "📷 Отправьте фото или скрин товара."
+        "📷 Отправьте фото или скрин товара.",
+        reply_markup=cancel_kb,
     )
 
+
+# ============================================================
+# ЕСЛИ ВМЕСТО ССЫЛКИ СРАЗУ ПРИСЛАЛИ ФОТО
+# ============================================================
 
 @router.message(
     OrderStates.waiting_link,
@@ -126,9 +180,14 @@ async def photo_before_link(
     await message.answer(
         "🔗 Сначала отправьте ссылку на товар.\n\n"
         "Если ссылки нет или вы не умеете её копировать — "
-        "отправьте символ -"
+        "отправьте символ -",
+        reply_markup=cancel_kb,
     )
 
+
+# ============================================================
+# ПОЛУЧИЛИ ФОТО
+# ============================================================
 
 @router.message(
     OrderStates.waiting_photo,
@@ -143,17 +202,21 @@ async def got_photo(
 
     await state.update_data(
         photo_id=photo_id,
+
         weight_estimated=False,
+
         estimated_weight_min=None,
         estimated_weight_max=None,
         estimated_weight_mid=None,
+
         estimated_product_type=None,
         estimated_confidence=None,
         estimated_note=None,
     )
 
     await message.answer(
-        "🤖 Анализирую фото товара..."
+        "🤖 Анализирую фото товара...",
+        reply_markup=cancel_kb,
     )
 
     try:
@@ -187,33 +250,46 @@ async def got_photo(
             result["max_kg"]
         )
 
-        if min_weight <= 0 or max_weight <= 0:
+        if (
+            min_weight <= 0
+            or max_weight <= 0
+        ):
             raise ValueError(
                 "AI вернул некорректный вес"
             )
 
         if min_weight > max_weight:
-            min_weight, max_weight = (
+            (
+                min_weight,
+                max_weight,
+            ) = (
                 max_weight,
                 min_weight,
             )
 
         mid_weight = round(
-            (min_weight + max_weight) / 2,
+            (
+                min_weight
+                + max_weight
+            ) / 2,
             3,
         )
 
         await state.update_data(
             weight_estimated=True,
+
             estimated_weight_min=min_weight,
             estimated_weight_max=max_weight,
             estimated_weight_mid=mid_weight,
+
             estimated_product_type=result.get(
                 "product_type"
             ),
+
             estimated_confidence=result.get(
                 "confidence"
             ),
+
             estimated_note=result.get(
                 "note"
             ),
@@ -221,15 +297,20 @@ async def got_photo(
 
         await message.answer(
             "🤖 Фото проанализировано.\n\n"
+
             f"Примерный вес 1 шт.: "
             f"{min_weight:.2f}–{max_weight:.2f} кг\n\n"
-            "⚠️ Вес ориентировочный и нужен "
-            "только для предварительной оценки.\n\n"
+
+            "⚠️ Вес ориентировочный и нужен только "
+            "для предварительной оценки.\n\n"
+
             "🚚 Доставка сейчас НЕ включается "
             "в сумму к оплате.\n"
             "Фактическая доставка будет уточнена "
             "после взвешивания.\n\n"
-            "💴 Введите цену в юанях, только число."
+
+            "💴 Введите цену в юанях, только число.",
+            reply_markup=cancel_kb,
         )
 
         await state.set_state(
@@ -245,6 +326,7 @@ async def got_photo(
 
         await state.update_data(
             weight_estimated=False,
+
             estimated_weight_min=None,
             estimated_weight_max=None,
             estimated_weight_mid=None,
@@ -253,16 +335,24 @@ async def got_photo(
         await message.answer(
             "⚠️ Не удалось автоматически определить "
             "примерный вес по фото.\n\n"
+
             "Это не мешает оформить заказ.\n"
-            "Фактический вес и доставка будут уточнены "
-            "после взвешивания.\n\n"
-            "💴 Введите цену в юанях, только число."
+
+            "Фактический вес и доставка будут "
+            "уточнены после взвешивания.\n\n"
+
+            "💴 Введите цену в юанях, только число.",
+            reply_markup=cancel_kb,
         )
 
         await state.set_state(
             OrderStates.waiting_price
         )
 
+
+# ============================================================
+# ЕСЛИ ВМЕСТО ФОТО ПРИСЛАЛИ ТЕКСТ
+# ============================================================
 
 @router.message(
     OrderStates.waiting_photo,
@@ -272,9 +362,14 @@ async def waiting_photo_text(
     message: Message,
 ):
     await message.answer(
-        "📷 Отправьте фото или скрин товара."
+        "📷 Отправьте фото или скрин товара.",
+        reply_markup=cancel_kb,
     )
 
+
+# ============================================================
+# ЦЕНА
+# ============================================================
 
 @router.message(
     OrderStates.waiting_price,
@@ -301,7 +396,8 @@ async def got_price(
             "⚠️ Нужно отправить число.\n\n"
             "Например:\n"
             "47\n"
-            "47.5"
+            "47.5",
+            reply_markup=cancel_kb,
         )
 
         return
@@ -315,9 +411,14 @@ async def got_price(
     )
 
     await message.answer(
-        "🔢 Введите количество, только целое число."
+        "🔢 Введите количество, только целое число.",
+        reply_markup=cancel_kb,
     )
 
+
+# ============================================================
+# КОЛИЧЕСТВО
+# ============================================================
 
 @router.message(
     OrderStates.waiting_qty,
@@ -335,7 +436,8 @@ async def got_qty(
     ):
         await message.answer(
             "⚠️ Нужно отправить целое число.\n\n"
-            "Например: 1 или 2"
+            "Например: 1 или 2",
+            reply_markup=cancel_kb,
         )
 
         return
@@ -351,9 +453,13 @@ async def got_qty(
     await message.answer(
         "📏 Введите размер.\n"
         "Если размера нет — отправьте -",
-        reply_markup=skip_kb,
+        reply_markup=skip_cancel_kb,
     )
 
+
+# ============================================================
+# РАЗМЕР
+# ============================================================
 
 @router.message(
     OrderStates.waiting_size,
@@ -380,6 +486,10 @@ async def got_size(
         state=state,
     )
 
+
+# ============================================================
+# СОХРАНЕНИЕ ТОВАРА В КОРЗИНУ
+# ============================================================
 
 async def save_item(
     message: Message,
@@ -416,30 +526,45 @@ async def save_item(
         2,
     )
 
+    # ВАЖНО:
+    # доставка здесь НЕ начисляется.
+    # AI-вес является только ориентировочным.
+
     await db.add_cart_item(
         user_id=message.from_user.id,
+
         link=data.get("link"),
+
         photo_id=data.get("photo_id"),
+
         price_yuan=price_yuan,
+
         quantity=quantity,
+
         size=data.get("size"),
+
         weight_kg=(
             mid_weight
             if weight_estimated
             else None
         ),
+
         weight_min_kg=(
             min_weight
             if weight_estimated
             else None
         ),
+
         weight_max_kg=(
             max_weight
             if weight_estimated
             else None
         ),
+
         weight_estimated=weight_estimated,
+
         shipping_rub=0,
+
         cost_rub=total_item_cost,
     )
 
@@ -451,6 +576,10 @@ async def save_item(
         message.from_user.id
     )
 
+    # ========================================================
+    # ЕСЛИ AI ОПРЕДЕЛИЛ ВЕС
+    # ========================================================
+
     if (
         weight_estimated
         and min_weight is not None
@@ -459,27 +588,44 @@ async def save_item(
         weight_block = (
             f"🤖 Примерный вес 1 шт.: "
             f"{min_weight:.2f}–{max_weight:.2f} кг\n"
+
             "⚠️ Вес ориентировочный\n"
+
             "🚚 Доставка: уточняется после "
             "фактического взвешивания"
         )
+
+    # ========================================================
+    # ЕСЛИ AI НЕ СМОГ ОПРЕДЕЛИТЬ ВЕС
+    # ========================================================
 
     else:
         weight_block = (
             "⚖️ Вес: будет уточнён после "
             "фактического взвешивания\n"
-            "🚚 Доставка: уточняется после взвешивания"
+
+            "🚚 Доставка: уточняется после "
+            "взвешивания"
         )
+
+    # ========================================================
+    # ТОВАР ДОБАВЛЕН
+    # ========================================================
 
     await message.answer(
         f"✅ Товар №{len(cart)} добавлен\n\n"
+
         f"Стоимость товара: "
         f"{cost:.0f} ₽\n\n"
+
         f"{weight_block}\n\n"
+
         f"💰 К оплате сейчас: "
         f"{total_item_cost:.0f} ₽\n\n"
+
         f"Общая сумма заказа: "
         f"{total:.0f} ₽",
+
         reply_markup=after_item_added_kb(),
     )
 
