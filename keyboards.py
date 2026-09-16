@@ -8,36 +8,23 @@ from aiogram.types import (
 from config import CLOSED_CHAT_URL, CLOSED_CHANNEL_URL
 
 
-# =========================================================
-# ГЛАВНОЕ МЕНЮ
-# =========================================================
-
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
+        [KeyboardButton(text="🛒 Новый заказ")],
         [
-            KeyboardButton(text="🛒 Новый заказ"),
-        ],
-        [
+            KeyboardButton(text="ℹ️ О боте"),
             KeyboardButton(text="📦 Как оформить заказ"),
         ],
         [
             KeyboardButton(text="📨 Мои заявки"),
             KeyboardButton(text="👤 Личный кабинет"),
         ],
-        [
-            KeyboardButton(text="🔄 Обновить статусы"),
-        ],
-        [
-            KeyboardButton(text="🔒 Закрытый чат и канал"),
-        ],
+        [KeyboardButton(text="🔄 Обновить статусы")],
+        [KeyboardButton(text="🔒 Закрытый чат и канал")],
     ],
     resize_keyboard=True,
 )
 
-
-# =========================================================
-# ПОСЛЕ ДОБАВЛЕНИЯ ТОВАРА
-# =========================================================
 
 def after_item_added_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -64,10 +51,6 @@ def after_item_added_kb() -> InlineKeyboardMarkup:
     )
 
 
-# =========================================================
-# КЛАВИАТУРА ПОД КОРЗИНОЙ
-# =========================================================
-
 def cart_footer_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -93,10 +76,6 @@ def cart_footer_kb() -> InlineKeyboardMarkup:
     )
 
 
-# =========================================================
-# КНОПКИ ПОД ОТДЕЛЬНЫМ ТОВАРОМ
-# =========================================================
-
 def cart_item_kb(item_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -113,10 +92,6 @@ def cart_item_kb(item_id: int) -> InlineKeyboardMarkup:
         ]
     )
 
-
-# =========================================================
-# ЗАКРЫТЫЙ ЧАТ / КАНАЛ
-# =========================================================
 
 closed_links_kb = InlineKeyboardMarkup(
     inline_keyboard=[
@@ -135,10 +110,6 @@ closed_links_kb = InlineKeyboardMarkup(
     ]
 )
 
-
-# =========================================================
-# СТАТУСЫ ЗАКАЗА ДЛЯ МЕНЕДЖЕРА
-# =========================================================
 
 STATUS_OPTIONS = [
     "В обработке",
@@ -169,20 +140,12 @@ def admin_status_kb(order_id: int) -> InlineKeyboardMarkup:
     if row:
         rows.append(row)
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=rows
-    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
-
-# =========================================================
-# ПРОПУСТИТЬ
-# =========================================================
 
 skip_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [
-            KeyboardButton(text="-")
-        ]
+        [KeyboardButton(text="-")]
     ],
     resize_keyboard=True,
     one_time_keyboard=True,
