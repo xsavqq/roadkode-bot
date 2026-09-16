@@ -1,302 +1,298 @@
-import aiosqlite
-from datetime import datetime
-from config import DB_PATH
+from aiogram import Router, F, Bot
+from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
-    user_id     INTEGER PRIMARY KEY,
-    username    TEXT,
-    full_name   TEXT,
-    phone       TEXT,
-    referred_by INTEGER,
-    balance_rub REAL DEFAULT 0,
-    created_at  TEXT
-);
+import database as db
 
-CREATE TABLE IF NOT EXISTS cart_items (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id       INTEGER NOT NULL,
-    link          TEXT,
-    photo_id      TEXT,
-    price_yuan    REAL NOT NULL,
-    quantity      INTEGER NOT NULL,
-    size          TEXT,
-    weight_kg     REAL,
-    weight_min_kg REAL,
-    weight_max_kg REAL,
-    weight_estimated INTEGER DEFAULT 0,
-    shipping_rub  REAL DEFAULT 0,
-    cost_rub      REAL NOT NULL,
-    created_at    TEXT
-);
+from config import (
+    REFERRAL_BONUS_PER_KG,
+)
 
-CREATE TABLE IF NOT EXISTS orders (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'Новая',
-    total_rub   REAL NOT NULL,
-    weight_kg   REAL,
-    weight_set  INTEGER DEFAULT 0,
-    created_at  TEXT
-);
+from states import CabinetStates
 
-CREATE TABLE IF NOT EXISTS order_items (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id      INTEGER NOT NULL,
-    link          TEXT,
-    photo_id      TEXT,
-    price_yuan    REAL NOT NULL,
-    quantity      INTEGER NOT NULL,
-    size          TEXT,
-    weight_kg     REAL,
-    weight_min_kg REAL,
-    weight_max_kg REAL,
-    weight_estimated INTEGER DEFAULT 0,
-    shipping_rub  REAL DEFAULT 0,
-    cost_rub      REAL NOT NULL
-);
-"""
+from keyboards import main_menu
 
 
-async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.executescript(SCHEMA)
-        # Миграция для уже существующей SQLite базы.
-        for statement in (
-            "ALTER TABLE cart_items ADD COLUMN weight_min_kg REAL",
-            "ALTER TABLE cart_items ADD COLUMN weight_max_kg REAL",
-            "ALTER TABLE cart_items ADD COLUMN weight_estimated INTEGER DEFAULT 0",
-            "ALTER TABLE order_items ADD COLUMN weight_min_kg REAL",
-            "ALTER TABLE order_items ADD COLUMN weight_max_kg REAL",
-            "ALTER TABLE order_items ADD COLUMN weight_estimated INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN referred_by INTEGER",
-            "ALTER TABLE users ADD COLUMN balance_rub REAL DEFAULT 0",
-            "ALTER TABLE orders ADD COLUMN weight_kg REAL",
-            "ALTER TABLE orders ADD COLUMN weight_set INTEGER DEFAULT 0",
+router = Router()
+
+
+# =========================================================
+# СТАТУСЫ
+# =========================================================
+
+STATUS_EMOJI = {
+
+    "Новая": "🆕",
+
+    "В обработке": "⏳",
+
+    "Выкуплен": "💰",
+
+    "На складе в Китае": "🏭",
+
+    "Отправлен": "🚚",
+
+    "Доставлен": "✅",
+
+    "Отменён": "❌",
+}
+
+
+# =========================================================
+# ЛИЧНЫЙ КАБИНЕТ
+# =========================================================
+
+@router.message(
+    F.text == "👤 Личный кабинет"
+)
+async def cabinet(
+    message: Message,
+    state: FSMContext,
+):
+
+    user = await db.get_user(
+        message.from_user.id
+    )
+
+    if (
+        user
+        and user["phone"]
+    ):
+
+        stats = await db.get_referral_stats(
+            message.from_user.id
+        )
+
+        await message.answer(
+
+            "👤 <b>Личный кабинет</b>\n\n"
+
+            f"Имя: "
+            f"{user['full_name']}\n"
+
+            f"Телефон: "
+            f"{user['phone']}\n"
+
+            f"Telegram: "
+            f"@{user['username'] or '—'}\n\n"
+
+            f"👥 Приглашено рефералов: "
+            f"<b>{stats['referrals_count']}</b>\n"
+
+            f"💰 Бонусный баланс: "
+            f"<b>{stats['balance_rub']:.0f} ₽</b>\n\n"
+
+            "Баланс можно использовать "
+            "как скидку на следующий заказ.",
+
+            reply_markup=main_menu,
+        )
+
+    else:
+
+        await state.set_state(
+            CabinetStates.waiting_phone
+        )
+
+        await message.answer(
+
+            "📱 <b>Укажите номер телефона "
+            "для связи.</b>\n\n"
+
+            "Например:\n"
+            "<b>+79991234567</b>"
+        )
+
+
+# =========================================================
+# ПРИГЛАСИТЬ ДРУГА
+# =========================================================
+
+@router.message(
+    F.text == "👥 Пригласить друга"
+)
+async def invite_friend(
+    message: Message,
+    bot: Bot,
+):
+
+    me = await bot.get_me()
+
+    ref_link = (
+        f"https://t.me/"
+        f"{me.username}"
+        f"?start=ref_"
+        f"{message.from_user.id}"
+    )
+
+    stats = await db.get_referral_stats(
+        message.from_user.id
+    )
+
+    await message.answer(
+
+        "👥 <b>Реферальная программа</b>\n\n"
+
+        "Приглашайте друзей в ROADKODE.\n\n"
+
+        f"🎁 За каждый фактический кг "
+        "заказа вашего реферала после "
+        "взвешивания вам начисляется "
+        f"<b>{REFERRAL_BONUS_PER_KG:.0f} ₽</b>.\n\n"
+
+        "💰 Бонус поступает на ваш баланс "
+        "и может использоваться "
+        "как скидка на следующие заказы.\n\n"
+
+        "🔗 <b>Ваша персональная ссылка:</b>\n"
+        f"{ref_link}\n\n"
+
+        f"👥 Приглашено: "
+        f"<b>{stats['referrals_count']}</b>\n"
+
+        f"💰 Баланс: "
+        f"<b>{stats['balance_rub']:.0f} ₽</b>",
+
+        reply_markup=main_menu,
+    )
+
+
+# =========================================================
+# ТЕЛЕФОН
+# =========================================================
+
+@router.message(
+    CabinetStates.waiting_phone,
+    F.text,
+)
+async def got_phone(
+    message: Message,
+    state: FSMContext,
+):
+
+    phone = message.text.strip()
+
+    if len(phone) < 5:
+
+        await message.answer(
+            "⚠️ Введите корректный номер телефона."
+        )
+
+        return
+
+    await db.set_phone(
+        message.from_user.id,
+        phone,
+    )
+
+    await state.clear()
+
+    await message.answer(
+
+        "✅ <b>Телефон сохранён.</b>\n\n"
+        "Теперь личный кабинет доступен.",
+
+        reply_markup=main_menu,
+    )
+
+
+# =========================================================
+# ТЕКСТ ЗАЯВОК
+# =========================================================
+
+async def _orders_text(
+    user_id: int,
+) -> str:
+
+    orders = await db.get_user_orders(
+        user_id
+    )
+
+    if not orders:
+
+        return (
+            "📨 <b>У вас пока нет заявок.</b>"
+        )
+
+    lines = [
+        "📨 <b>Ваши заявки:</b>\n"
+    ]
+
+    for order in orders:
+
+        emoji = STATUS_EMOJI.get(
+            order["status"],
+            "•",
+        )
+
+        line = (
+
+            f"{emoji} "
+            f"<b>Заявка №{order['id']}</b>\n"
+
+            f"Статус: "
+            f"<b>{order['status']}</b>\n"
+
+            f"Сумма: "
+            f"<b>{order['total_rub']:.0f} ₽</b>"
+        )
+
+        if (
+            order["weight_set"]
+            and order["weight_kg"]
+            is not None
         ):
-            try:
-                await db.execute(statement)
-            except Exception as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
-        await db.commit()
 
+            line += (
 
-async def ensure_user(user_id: int, username: str, full_name: str, referred_by: int = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-        row = await cur.fetchone()
-        if row is None:
-            if referred_by == user_id:
-                referred_by = None
-            await db.execute(
-                "INSERT INTO users (user_id, username, full_name, phone, referred_by, balance_rub, created_at) "
-                "VALUES (?, ?, ?, ?, ?, 0, ?)",
-                (user_id, username, full_name, None, referred_by, datetime.utcnow().isoformat()),
+                f"\n⚖️ Вес: "
+                f"<b>{order['weight_kg']:.2f} кг</b>"
             )
-            await db.commit()
+
+        lines.append(line)
+
+    return "\n\n".join(
+        lines
+    )
 
 
-async def set_phone(user_id: int, phone: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE users SET phone = ? WHERE user_id = ?", (phone, user_id))
-        await db.commit()
+# =========================================================
+# МОИ ЗАЯВКИ
+# =========================================================
+
+@router.message(
+    F.text == "📨 Мои заявки"
+)
+async def my_orders(
+    message: Message,
+):
+
+    await message.answer(
+
+        await _orders_text(
+            message.from_user.id
+        ),
+
+        reply_markup=main_menu,
+    )
 
 
-async def get_user(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        return await cur.fetchone()
+# =========================================================
+# ОБНОВИТЬ СТАТУСЫ
+# =========================================================
 
+@router.message(
+    F.text == "🔄 Обновить статусы"
+)
+async def refresh_statuses(
+    message: Message,
+):
 
-async def add_cart_item(user_id: int, link: str, photo_id: str, price_yuan: float,
-                         quantity: int, size: str, cost_rub: float,
-                         weight_kg: float = None, shipping_rub: float = 0,
-                         weight_min_kg: float = None, weight_max_kg: float = None,
-                         weight_estimated: bool = False):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT INTO cart_items
-               (user_id, link, photo_id, price_yuan, quantity, size, weight_kg, weight_min_kg, weight_max_kg, weight_estimated, shipping_rub, cost_rub, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, link, photo_id, price_yuan, quantity, size, weight_kg, weight_min_kg, weight_max_kg, int(weight_estimated), shipping_rub, cost_rub,
-             datetime.utcnow().isoformat()),
-        )
-        await db.commit()
+    await message.answer(
 
+        await _orders_text(
+            message.from_user.id
+        ),
 
-async def get_cart(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT * FROM cart_items WHERE user_id = ? ORDER BY id", (user_id,)
-        )
-        return await cur.fetchall()
-
-
-async def get_cart_total(user_id: int) -> float:
-    items = await get_cart(user_id)
-    return round(sum(i["cost_rub"] for i in items), 2)
-
-
-async def delete_cart_item(item_id: int, user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM cart_items WHERE id = ? AND user_id = ?", (item_id, user_id))
-        await db.commit()
-
-
-async def clear_cart(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM cart_items WHERE user_id = ?", (user_id,))
-        await db.commit()
-
-
-async def get_cart_item(item_id: int, user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT * FROM cart_items WHERE id = ? AND user_id = ?", (item_id, user_id)
-        )
-        return await cur.fetchone()
-
-
-async def create_order_from_cart(user_id: int) -> int | None:
-    items = await get_cart(user_id)
-    if not items:
-        return None
-    total = round(sum(i["cost_rub"] for i in items), 2)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "INSERT INTO orders (user_id, status, total_rub, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, "Новая", total, datetime.utcnow().isoformat()),
-        )
-        order_id = cur.lastrowid
-        for i in items:
-            await db.execute(
-                """INSERT INTO order_items
-                   (order_id, link, photo_id, price_yuan, quantity, size, weight_kg, weight_min_kg, weight_max_kg, weight_estimated, shipping_rub, cost_rub)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (order_id, i["link"], i["photo_id"], i["price_yuan"], i["quantity"], i["size"],
-                 i["weight_kg"], i["weight_min_kg"], i["weight_max_kg"], i["weight_estimated"],
-                 i["shipping_rub"], i["cost_rub"]),
-            )
-        await db.commit()
-    await clear_cart(user_id)
-    return order_id
-
-
-async def get_order_items(order_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,))
-        return await cur.fetchall()
-
-
-async def get_user_orders(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC", (user_id,)
-        )
-        return await cur.fetchall()
-
-
-async def get_order(order_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
-        return await cur.fetchone()
-
-
-async def set_order_status(order_id: int, status: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
-        await db.commit()
-
-
-async def get_referral_stats(user_id: int) -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT COUNT(*) AS cnt FROM users WHERE referred_by = ?", (user_id,)
-        )
-        count_row = await cur.fetchone()
-        cur = await db.execute(
-            "SELECT balance_rub FROM users WHERE user_id = ?", (user_id,)
-        )
-        balance_row = await cur.fetchone()
-        return {
-            "referrals_count": count_row["cnt"] if count_row else 0,
-            "balance_rub": balance_row["balance_rub"] if balance_row else 0,
-        }
-
-
-async def add_balance(user_id: int, amount: float):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE users SET balance_rub = balance_rub + ? WHERE user_id = ?",
-            (amount, user_id),
-        )
-        await db.commit()
-
-
-async def spend_balance(user_id: int, amount: float):
-    """Списывает сумму с баланса, не уходя ниже нуля. Возвращает фактически списанную сумму."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT balance_rub FROM users WHERE user_id = ?", (user_id,))
-        row = await cur.fetchone()
-        available = row["balance_rub"] if row else 0
-        spend = min(available, amount)
-        if spend > 0:
-            await db.execute(
-                "UPDATE users SET balance_rub = balance_rub - ? WHERE user_id = ?",
-                (spend, user_id),
-            )
-            await db.commit()
-        return round(spend, 2)
-
-
-async def set_order_weight(order_id: int, weight_kg: float, price_per_kg: float, referral_bonus_per_kg: float):
-    """Менеджер вводит фактический вес заказа после взвешивания на складе.
-    Пересчитывает доставку и итог заказа, и если заказчик пришёл по рефералке —
-    начисляет пригласившему бонус на баланс. Возвращает dict с деталями для уведомлений."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
-        order = await cur.fetchone()
-        if order is None:
-            return None
-        if order["weight_set"]:
-            return {"already_set": True}
-
-        shipping = round(weight_kg * price_per_kg, 2)
-        new_total = round(order["total_rub"] + shipping, 2)
-
-        await db.execute(
-            "UPDATE orders SET weight_kg = ?, weight_set = 1, total_rub = ? WHERE id = ?",
-            (weight_kg, new_total, order_id),
-        )
-        await db.commit()
-
-        cur = await db.execute("SELECT referred_by FROM users WHERE user_id = ?", (order["user_id"],))
-        user_row = await cur.fetchone()
-        referred_by = user_row["referred_by"] if user_row else None
-
-        bonus_credited = 0
-        if referred_by:
-            bonus_credited = round(weight_kg * referral_bonus_per_kg, 2)
-            await db.execute(
-                "UPDATE users SET balance_rub = balance_rub + ? WHERE user_id = ?",
-                (bonus_credited, referred_by),
-            )
-            await db.commit()
-
-        return {
-            "already_set": False,
-            "shipping_rub": shipping,
-            "new_total": new_total,
-            "referred_by": referred_by,
-            "bonus_credited": bonus_credited,
-        }
+        reply_markup=main_menu,
+    )
