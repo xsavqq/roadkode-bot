@@ -8,7 +8,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # Менеджер / группа менеджеров
 MANAGER_CHAT_ID = int(
