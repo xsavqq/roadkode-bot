@@ -12,6 +12,7 @@ from keyboards import (
     main_menu,
 )
 
+
 router = Router()
 
 
@@ -75,13 +76,21 @@ def _item_text(item) -> str:
     return "\n".join(lines)
 
 
-@router.callback_query(F.data == "view_cart")
-async def view_cart(callback: CallbackQuery):
+@router.callback_query(
+    F.data == "view_cart"
+)
+async def view_cart(
+    callback: CallbackQuery,
+):
     await show_cart(callback)
 
 
-@router.message(F.text == "🛒 Посмотреть корзину")
-async def view_cart_msg(message: Message):
+@router.message(
+    F.text == "🛒 Посмотреть корзину"
+)
+async def view_cart_msg(
+    message: Message,
+):
     items = await db.get_cart(
         message.from_user.id
     )
@@ -91,6 +100,7 @@ async def view_cart_msg(message: Message):
             "Корзина пуста.",
             reply_markup=main_menu,
         )
+
         return
 
     for item in items:
@@ -104,6 +114,7 @@ async def view_cart_msg(message: Message):
                     item["id"]
                 ),
             )
+
         else:
             await message.answer(
                 text,
@@ -123,10 +134,14 @@ async def view_cart_msg(message: Message):
     )
 
 
-async def show_cart(callback: CallbackQuery):
+async def show_cart(
+    callback: CallbackQuery,
+):
     user_id = callback.from_user.id
 
-    items = await db.get_cart(user_id)
+    items = await db.get_cart(
+        user_id
+    )
 
     if not items:
         await callback.message.answer(
@@ -135,6 +150,7 @@ async def show_cart(callback: CallbackQuery):
         )
 
         await callback.answer()
+
         return
 
     for item in items:
@@ -148,6 +164,7 @@ async def show_cart(callback: CallbackQuery):
                     item["id"]
                 ),
             )
+
         else:
             await callback.message.answer(
                 text,
@@ -223,6 +240,7 @@ async def edit_item_start(
             "Товар не найден",
             show_alert=True,
         )
+
         return
 
     await state.set_state(
@@ -236,7 +254,8 @@ async def edit_item_start(
     await callback.message.answer(
         f"Текущая цена: "
         f"{item['price_yuan']:.0f} ¥, "
-        f"количество: {item['quantity']} шт.\n"
+        f"количество: "
+        f"{item['quantity']} шт.\n"
         "Введите новую цену в юанях, только число."
     )
 
@@ -268,6 +287,7 @@ async def edit_item_price(
             "⚠️ Нужно отправить число, "
             "например: 47 или 47.5"
         )
+
         return
 
     data = await state.get_data()
@@ -284,6 +304,7 @@ async def edit_item_price(
         )
 
         await state.clear()
+
         return
 
     product_cost = calc_cost(
@@ -291,7 +312,10 @@ async def edit_item_price(
         item["quantity"],
     )
 
-    shipping = item["shipping_rub"] or 0
+    shipping = (
+        item["shipping_rub"]
+        or 0
+    )
 
     new_cost = round(
         product_cost
@@ -365,15 +389,21 @@ async def send_to_manager(
 ):
     user_id = callback.from_user.id
 
-    items = await db.get_cart(user_id)
+    items = await db.get_cart(
+        user_id
+    )
 
     if not items:
         await callback.answer(
             "Корзина пуста",
             show_alert=True,
         )
+
         return
 
+    # Создаём заявку.
+    # При этом database.py автоматически
+    # создаст постоянный код клиента.
     order_id = await db.create_order_from_cart(
         user_id
     )
@@ -383,6 +413,7 @@ async def send_to_manager(
             "Не удалось создать заявку",
             show_alert=True,
         )
+
         return
 
     order = await db.get_order(
@@ -412,7 +443,8 @@ async def send_to_manager(
     )
 
     footer = (
-        f"\n\nИтого к оплате сейчас: "
+        f"\n\n"
+        f"Итого к оплате сейчас: "
         f"{order['total_rub']:.0f} ₽\n"
         f"Статус: {order['status']}"
     )
