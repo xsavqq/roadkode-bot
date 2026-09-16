@@ -1,4 +1,4 @@
-мfrom io import BytesIO
+from io import BytesIO
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
@@ -9,6 +9,7 @@ from ai_vision import estimate_weight_from_image
 from config import calc_cost, yuan_rate_text
 from states import OrderStates
 from keyboards import after_item_added_kb, main_menu, skip_kb
+
 
 router = Router()
 
@@ -32,15 +33,29 @@ async def start_new_item(
     )
 
     if isinstance(target, CallbackQuery):
-        await target.message.answer(rate_text)
-        await target.message.answer(link_text)
+        await target.message.answer(
+            rate_text
+        )
+
+        await target.message.answer(
+            link_text
+        )
+
         await target.answer()
+
     else:
-        await target.answer(rate_text)
-        await target.answer(link_text)
+        await target.answer(
+            rate_text
+        )
+
+        await target.answer(
+            link_text
+        )
 
 
-@router.message(F.text == "🛒 Новый заказ")
+@router.message(
+    F.text == "🛒 Новый заказ"
+)
 async def new_order(
     message: Message,
     state: FSMContext,
@@ -51,7 +66,9 @@ async def new_order(
     )
 
 
-@router.callback_query(F.data == "add_item")
+@router.callback_query(
+    F.data == "add_item"
+)
 async def add_item_cb(
     callback: CallbackQuery,
     state: FSMContext,
@@ -72,7 +89,11 @@ async def got_link_text(
 ):
     text = message.text.strip()
 
-    link = None if text == "-" else text
+    link = (
+        None
+        if text == "-"
+        else text
+    )
 
     await state.update_data(
         link=link,
@@ -99,7 +120,9 @@ async def got_link_text(
     OrderStates.waiting_link,
     F.photo,
 )
-async def photo_before_link(message: Message):
+async def photo_before_link(
+    message: Message,
+):
     await message.answer(
         "🔗 Сначала отправьте ссылку на товар.\n\n"
         "Если ссылки нет или вы не умеете её копировать — "
@@ -200,8 +223,8 @@ async def got_photo(
             "🤖 Фото проанализировано.\n\n"
             f"Примерный вес 1 шт.: "
             f"{min_weight:.2f}–{max_weight:.2f} кг\n\n"
-            "⚠️ Вес ориентировочный и нужен только "
-            "для предварительной оценки.\n\n"
+            "⚠️ Вес ориентировочный и нужен "
+            "только для предварительной оценки.\n\n"
             "🚚 Доставка сейчас НЕ включается "
             "в сумму к оплате.\n"
             "Фактическая доставка будет уточнена "
@@ -280,6 +303,7 @@ async def got_price(
             "47\n"
             "47.5"
         )
+
         return
 
     await state.update_data(
@@ -305,11 +329,15 @@ async def got_qty(
 ):
     raw = message.text.strip()
 
-    if not raw.isdigit() or int(raw) <= 0:
+    if (
+        not raw.isdigit()
+        or int(raw) <= 0
+    ):
         await message.answer(
             "⚠️ Нужно отправить целое число.\n\n"
             "Например: 1 или 2"
         )
+
         return
 
     await state.update_data(
@@ -383,6 +411,11 @@ async def save_item(
         "estimated_weight_mid"
     )
 
+    total_item_cost = round(
+        cost,
+        2,
+    )
+
     await db.add_cart_item(
         user_id=message.from_user.id,
         link=data.get("link"),
@@ -407,7 +440,7 @@ async def save_item(
         ),
         weight_estimated=weight_estimated,
         shipping_rub=0,
-        cost_rub=round(cost, 2),
+        cost_rub=total_item_cost,
     )
 
     cart = await db.get_cart(
@@ -430,6 +463,7 @@ async def save_item(
             "🚚 Доставка: уточняется после "
             "фактического взвешивания"
         )
+
     else:
         weight_block = (
             "⚖️ Вес: будет уточнён после "
@@ -439,10 +473,11 @@ async def save_item(
 
     await message.answer(
         f"✅ Товар №{len(cart)} добавлен\n\n"
-        f"Стоимость товара: {cost:.0f} ₽\n\n"
+        f"Стоимость товара: "
+        f"{cost:.0f} ₽\n\n"
         f"{weight_block}\n\n"
         f"💰 К оплате сейчас: "
-        f"{cost:.0f} ₽\n\n"
+        f"{total_item_cost:.0f} ₽\n\n"
         f"Общая сумма заказа: "
         f"{total:.0f} ₽",
         reply_markup=after_item_added_kb(),
