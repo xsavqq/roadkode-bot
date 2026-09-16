@@ -1,275 +1,435 @@
+from io import BytesIO
+
 from aiogram import Router, F, Bot
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+)
 from aiogram.fsm.context import FSMContext
 
 import database as db
-from config import MANAGER_CHAT_ID, calc_cost
-from states import EditItemStates
+
+from ai_vision import (
+    estimate_weight_from_image,
+)
+
+from config import (
+    calc_cost,
+    yuan_rate_text,
+)
+
+from states import OrderStates
+
 from keyboards import (
-    cart_footer_kb,
-    cart_item_kb,
-    admin_status_kb,
+    after_item_added_kb,
     main_menu,
+    cancel_kb,
+    skip_cancel_kb,
 )
 
 
 router = Router()
 
 
-def _item_text(item) -> str:
-    lines = [
-        f"Товар: {item['link'] or '📎 фото / без ссылки'}",
-        f"Цена: {item['price_yuan']:.0f} ¥  ×  {item['quantity']} шт.",
-        f"Размер: {item['size'] or 'не указан'}",
-    ]
+# =========================================================
+# ОТМЕНА
+# =========================================================
 
-    if item["weight_estimated"]:
-        min_weight = item["weight_min_kg"]
-        max_weight = item["weight_max_kg"]
-
-        if (
-            min_weight is not None
-            and max_weight is not None
-        ):
-            lines.append(
-                f"🤖 Примерный вес 1 шт.: "
-                f"{min_weight:.2f}–{max_weight:.2f} кг"
-            )
-
-        lines.append(
-            "🚚 Доставка: не включена, "
-            "уточняется после фактического взвешивания"
-        )
-
-        lines.append(
-            f"💰 К оплате сейчас: "
-            f"{item['cost_rub']:.0f} ₽"
-        )
-
-    elif item["weight_kg"]:
-        lines.append(
-            f"⚖️ Вес: "
-            f"{item['weight_kg']:.2f} кг"
-        )
-
-        if item["shipping_rub"]:
-            lines.append(
-                f"🚚 Доставка: "
-                f"{item['shipping_rub']:.0f} ₽"
-            )
-
-        lines.append(
-            f"💰 Стоимость: "
-            f"{item['cost_rub']:.0f} ₽"
-        )
-
-    else:
-        lines.append(
-            "⚖️ Вес: не указан"
-        )
-
-        lines.append(
-            f"💰 Стоимость: "
-            f"{item['cost_rub']:.0f} ₽"
-        )
-
-    return "\n".join(lines)
-
-
-@router.callback_query(
-    F.data == "view_cart"
-)
-async def view_cart(
-    callback: CallbackQuery,
-):
-    await show_cart(callback)
-
-
-@router.message(
-    F.text == "🛒 Посмотреть корзину"
-)
-async def view_cart_msg(
+@router.message(F.text == "❌ Отмена")
+async def cancel_order(
     message: Message,
+    state: FSMContext,
 ):
-    items = await db.get_cart(
-        message.from_user.id
-    )
 
-    if not items:
-        await message.answer(
-            "Корзина пуста.",
-            reply_markup=main_menu,
-        )
-
-        return
-
-    for item in items:
-        text = _item_text(item)
-
-        if item["photo_id"]:
-            await message.answer_photo(
-                item["photo_id"],
-                caption=text,
-                reply_markup=cart_item_kb(
-                    item["id"]
-                ),
-            )
-
-        else:
-            await message.answer(
-                text,
-                reply_markup=cart_item_kb(
-                    item["id"]
-                ),
-            )
-
-    total = await db.get_cart_total(
-        message.from_user.id
-    )
+    await state.clear()
 
     await message.answer(
-        f"Общая сумма к оплате сейчас: "
-        f"{total:.0f} ₽",
-        reply_markup=cart_footer_kb(),
+        "❌ <b>Оформление заказа отменено.</b>\n\n"
+        "Выберите действие.",
+        reply_markup=main_menu,
     )
 
 
-async def show_cart(
-    callback: CallbackQuery,
+# =========================================================
+# НАЧАЛО НОВОГО ТОВАРА
+# =========================================================
+
+async def start_new_item(
+    target,
+    state: FSMContext,
 ):
-    user_id = callback.from_user.id
 
-    items = await db.get_cart(
-        user_id
+    await state.clear()
+
+    await state.set_state(
+        OrderStates.waiting_link
     )
 
-    if not items:
-        await callback.message.answer(
-            "Корзина пуста.",
-            reply_markup=main_menu,
+    rate_text = yuan_rate_text()
+
+    link_text = (
+        "🔗 <b>Отправьте ссылку на товар.</b>\n\n"
+        "Если ссылки нет или вы не умеете "
+        "её копировать — отправьте символ <b>-</b>"
+    )
+
+    if isinstance(target, CallbackQuery):
+
+        await target.message.answer(
+            rate_text
         )
 
-        await callback.answer()
+        await target.message.answer(
+            link_text,
+            reply_markup=cancel_kb,
+        )
 
-        return
+        await target.answer()
 
-    for item in items:
-        text = _item_text(item)
+    else:
 
-        if item["photo_id"]:
-            await callback.message.answer_photo(
-                item["photo_id"],
-                caption=text,
-                reply_markup=cart_item_kb(
-                    item["id"]
-                ),
-            )
+        await target.answer(
+            rate_text
+        )
 
-        else:
-            await callback.message.answer(
-                text,
-                reply_markup=cart_item_kb(
-                    item["id"]
-                ),
-            )
-
-    total = await db.get_cart_total(
-        user_id
-    )
-
-    await callback.message.answer(
-        f"Общая сумма к оплате сейчас: "
-        f"{total:.0f} ₽",
-        reply_markup=cart_footer_kb(),
-    )
-
-    await callback.answer()
+        await target.answer(
+            link_text,
+            reply_markup=cancel_kb,
+        )
 
 
-@router.callback_query(
-    F.data.startswith("del_item:")
+# =========================================================
+# НОВЫЙ ЗАКАЗ
+# =========================================================
+
+@router.message(
+    F.text == "🛒 Новый заказ"
 )
-async def delete_item(
-    callback: CallbackQuery,
+async def new_order(
+    message: Message,
+    state: FSMContext,
 ):
-    item_id = int(
-        callback.data.split(":")[1]
+
+    await start_new_item(
+        message,
+        state,
     )
 
-    await db.delete_cart_item(
-        item_id,
-        callback.from_user.id,
-    )
 
-    total = await db.get_cart_total(
-        callback.from_user.id
-    )
-
-    await callback.message.edit_reply_markup(
-        reply_markup=None
-    )
-
-    await callback.message.answer(
-        f"🗑 Товар удалён.\n"
-        f"Общая сумма: {total:.0f} ₽"
-    )
-
-    await callback.answer(
-        "Удалено"
-    )
-
+# =========================================================
+# ДОБАВИТЬ ЕЩЁ ОДИН ТОВАР
+# =========================================================
 
 @router.callback_query(
-    F.data.startswith("edit_item:")
+    F.data == "add_item"
 )
-async def edit_item_start(
+async def add_item_cb(
     callback: CallbackQuery,
     state: FSMContext,
 ):
-    item_id = int(
-        callback.data.split(":")[1]
+
+    await start_new_item(
+        callback,
+        state,
     )
 
-    item = await db.get_cart_item(
-        item_id,
-        callback.from_user.id,
-    )
 
-    if not item:
-        await callback.answer(
-            "Товар не найден",
-            show_alert=True,
-        )
+# =========================================================
+# ПОЛУЧИЛИ ССЫЛКУ
+# =========================================================
 
-        return
+@router.message(
+    OrderStates.waiting_link,
+    F.text,
+)
+async def got_link_text(
+    message: Message,
+    state: FSMContext,
+):
 
-    await state.set_state(
-        EditItemStates.waiting_new_price
+    text = message.text.strip()
+
+    link = (
+        None
+        if text == "-"
+        else text
     )
 
     await state.update_data(
-        item_id=item_id
+        link=link,
+
+        photo_id=None,
+
+        weight_estimated=False,
+
+        estimated_weight_min=None,
+        estimated_weight_max=None,
+        estimated_weight_mid=None,
+
+        estimated_product_type=None,
+        estimated_confidence=None,
+        estimated_note=None,
     )
 
-    await callback.message.answer(
-        f"Текущая цена: "
-        f"{item['price_yuan']:.0f} ¥, "
-        f"количество: "
-        f"{item['quantity']} шт.\n"
-        "Введите новую цену в юанях, только число."
+    await state.set_state(
+        OrderStates.waiting_photo
     )
 
-    await callback.answer()
+    await message.answer(
+        "📷 <b>Теперь отправьте фото "
+        "или скрин товара.</b>\n\n"
+        "По фото бот попробует определить "
+        "примерный вес товара.",
+        reply_markup=cancel_kb,
+    )
 
+
+# =========================================================
+# ФОТО ДО ССЫЛКИ
+# =========================================================
 
 @router.message(
-    EditItemStates.waiting_new_price,
+    OrderStates.waiting_link,
+    F.photo,
+)
+async def photo_before_link(
+    message: Message,
+):
+
+    await message.answer(
+        "🔗 Сначала отправьте ссылку на товар.\n\n"
+        "Если ссылки нет или вы не умеете "
+        "её копировать — отправьте символ <b>-</b>",
+        reply_markup=cancel_kb,
+    )
+
+
+# =========================================================
+# ПОЛУЧИЛИ ФОТО
+# =========================================================
+
+@router.message(
+    OrderStates.waiting_photo,
+    F.photo,
+)
+async def got_photo(
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+):
+
+    photo_id = (
+        message.photo[-1].file_id
+    )
+
+    await state.update_data(
+        photo_id=photo_id,
+
+        weight_estimated=False,
+
+        estimated_weight_min=None,
+        estimated_weight_max=None,
+        estimated_weight_mid=None,
+    )
+
+    await message.answer(
+        "🤖 <b>Анализирую фото товара...</b>",
+        reply_markup=cancel_kb,
+    )
+
+    try:
+
+        telegram_file = await bot.get_file(
+            photo_id
+        )
+
+        photo_buffer = BytesIO()
+
+        await bot.download(
+            telegram_file,
+            destination=photo_buffer,
+        )
+
+        photo_bytes = (
+            photo_buffer.getvalue()
+        )
+
+        if not photo_bytes:
+            raise ValueError(
+                "Не удалось скачать изображение"
+            )
+
+        result = await estimate_weight_from_image(
+            photo_bytes
+        )
+
+        min_weight = float(
+            result["min_kg"]
+        )
+
+        max_weight = float(
+            result["max_kg"]
+        )
+
+        if (
+            min_weight <= 0
+            or max_weight <= 0
+        ):
+            raise ValueError(
+                "AI вернул некорректный вес"
+            )
+
+        if min_weight > max_weight:
+
+            min_weight, max_weight = (
+                max_weight,
+                min_weight,
+            )
+
+        mid_weight = round(
+            (
+                min_weight
+                + max_weight
+            ) / 2,
+            3,
+        )
+
+        await state.update_data(
+
+            weight_estimated=True,
+
+            estimated_weight_min=(
+                min_weight
+            ),
+
+            estimated_weight_max=(
+                max_weight
+            ),
+
+            estimated_weight_mid=(
+                mid_weight
+            ),
+
+            estimated_product_type=(
+                result.get(
+                    "product_type"
+                )
+            ),
+
+            estimated_confidence=(
+                result.get(
+                    "confidence"
+                )
+            ),
+
+            estimated_note=(
+                result.get(
+                    "note"
+                )
+            ),
+        )
+
+        await message.answer(
+
+            "🤖 <b>Фото проанализировано.</b>\n\n"
+
+            f"Примерный вес 1 шт.: "
+            f"<b>{min_weight:.2f}–"
+            f"{max_weight:.2f} кг</b>\n\n"
+
+            "⚠️ Вес ориентировочный "
+            "и используется только для "
+            "предварительной информации.\n\n"
+
+            "🚚 <b>Доставка сейчас НЕ включается "
+            "в сумму.</b>\n"
+            "Фактическая доставка будет "
+            "рассчитана после взвешивания "
+            "на складе.\n\n"
+
+            "💴 <b>Введите цену товара "
+            "в юанях.</b>\n"
+            "Например: <b>129</b>",
+
+            reply_markup=cancel_kb,
+        )
+
+        await state.set_state(
+            OrderStates.waiting_price
+        )
+
+    except Exception as exc:
+
+        print(
+            "AI WEIGHT ESTIMATION ERROR:",
+            repr(exc),
+            flush=True,
+        )
+
+        await state.update_data(
+
+            weight_estimated=False,
+
+            estimated_weight_min=None,
+            estimated_weight_max=None,
+            estimated_weight_mid=None,
+
+        )
+
+        await message.answer(
+
+            "⚠️ <b>Не удалось автоматически "
+            "определить примерный вес.</b>\n\n"
+
+            "Это не мешает оформить заказ.\n"
+
+            "Фактический вес и доставка будут "
+            "уточнены после взвешивания.\n\n"
+
+            "💴 <b>Введите цену товара "
+            "в юанях.</b>\n"
+            "Например: <b>129</b>",
+
+            reply_markup=cancel_kb,
+        )
+
+        await state.set_state(
+            OrderStates.waiting_price
+        )
+
+
+# =========================================================
+# ВМЕСТО ФОТО ПРИСЛАЛИ ТЕКСТ
+# =========================================================
+
+@router.message(
+    OrderStates.waiting_photo,
     F.text,
 )
-async def edit_item_price(
+async def waiting_photo_text(
+    message: Message,
+):
+
+    await message.answer(
+        "📷 <b>Отправьте именно фото "
+        "или скрин товара.</b>",
+        reply_markup=cancel_kb,
+    )
+
+
+# =========================================================
+# ЦЕНА
+# =========================================================
+
+@router.message(
+    OrderStates.waiting_price,
+    F.text,
+)
+async def got_price(
     message: Message,
     state: FSMContext,
 ):
+
     raw = (
         message.text
         .strip()
@@ -277,197 +437,276 @@ async def edit_item_price(
     )
 
     try:
+
         price = float(raw)
 
         if price <= 0:
             raise ValueError
 
     except ValueError:
+
         await message.answer(
-            "⚠️ Нужно отправить число, "
-            "например: 47 или 47.5"
+            "⚠️ Нужно отправить число.\n\n"
+            "Например: <b>47</b> или <b>47.5</b>",
+            reply_markup=cancel_kb,
         )
 
         return
+
+    await state.update_data(
+        price_yuan=price
+    )
+
+    await state.set_state(
+        OrderStates.waiting_qty
+    )
+
+    await message.answer(
+        "🔢 <b>Введите количество.</b>\n\n"
+        "Только целое число.\n"
+        "Например: <b>1</b> или <b>2</b>",
+        reply_markup=cancel_kb,
+    )
+
+
+# =========================================================
+# КОЛИЧЕСТВО
+# =========================================================
+
+@router.message(
+    OrderStates.waiting_qty,
+    F.text,
+)
+async def got_qty(
+    message: Message,
+    state: FSMContext,
+):
+
+    raw = message.text.strip()
+
+    if (
+        not raw.isdigit()
+        or int(raw) <= 0
+    ):
+
+        await message.answer(
+            "⚠️ Нужно отправить целое число.\n\n"
+            "Например: <b>1</b> или <b>2</b>",
+            reply_markup=cancel_kb,
+        )
+
+        return
+
+    quantity = int(raw)
+
+    await state.update_data(
+        quantity=quantity
+    )
+
+    await state.set_state(
+        OrderStates.waiting_size
+    )
+
+    await message.answer(
+        "📏 <b>Введите размер товара.</b>\n\n"
+        "Если размера нет — отправьте <b>-</b>.",
+        reply_markup=skip_cancel_kb,
+    )
+
+
+# =========================================================
+# РАЗМЕР
+# =========================================================
+
+@router.message(
+    OrderStates.waiting_size,
+    F.text,
+)
+async def got_size(
+    message: Message,
+    state: FSMContext,
+):
+
+    size = (
+        None
+        if message.text.strip() == "-"
+        else message.text.strip()
+    )
+
+    await state.update_data(
+        size=size
+    )
+
+    await save_item(
+        message,
+        state,
+    )
+
+
+# =========================================================
+# СОХРАНЕНИЕ ТОВАРА В КОРЗИНУ
+# =========================================================
+
+async def save_item(
+    message: Message,
+    state: FSMContext,
+):
 
     data = await state.get_data()
 
-    item = await db.get_cart_item(
-        data["item_id"],
-        message.from_user.id,
+    price_yuan = data[
+        "price_yuan"
+    ]
+
+    quantity = data[
+        "quantity"
+    ]
+
+    cost = calc_cost(
+        price_yuan,
+        quantity,
     )
 
-    if not item:
-        await message.answer(
-            "Товар не найден.",
-            reply_markup=main_menu,
+    weight_estimated = bool(
+        data.get(
+            "weight_estimated"
         )
-
-        await state.clear()
-
-        return
-
-    product_cost = calc_cost(
-        price,
-        item["quantity"],
     )
 
-    shipping = (
-        item["shipping_rub"]
-        or 0
+    min_weight = data.get(
+        "estimated_weight_min"
     )
 
-    new_cost = round(
-        product_cost
-        if item["weight_estimated"]
-        else product_cost + shipping,
-        2,
+    max_weight = data.get(
+        "estimated_weight_max"
     )
 
-    await db.delete_cart_item(
-        item["id"],
-        message.from_user.id,
+    mid_weight = data.get(
+        "estimated_weight_mid"
     )
 
     await db.add_cart_item(
-        user_id=message.from_user.id,
-        link=item["link"],
-        photo_id=item["photo_id"],
-        price_yuan=price,
-        quantity=item["quantity"],
-        size=item["size"],
-        weight_kg=item["weight_kg"],
-        weight_min_kg=item["weight_min_kg"],
-        weight_max_kg=item["weight_max_kg"],
-        weight_estimated=bool(
-            item["weight_estimated"]
+
+        user_id=(
+            message.from_user.id
         ),
-        shipping_rub=shipping,
-        cost_rub=new_cost,
+
+        link=data.get(
+            "link"
+        ),
+
+        photo_id=data.get(
+            "photo_id"
+        ),
+
+        price_yuan=price_yuan,
+
+        quantity=quantity,
+
+        size=data.get(
+            "size"
+        ),
+
+        weight_kg=(
+            mid_weight
+            if weight_estimated
+            else None
+        ),
+
+        weight_min_kg=(
+            min_weight
+            if weight_estimated
+            else None
+        ),
+
+        weight_max_kg=(
+            max_weight
+            if weight_estimated
+            else None
+        ),
+
+        weight_estimated=(
+            weight_estimated
+        ),
+
+        shipping_rub=0,
+
+        cost_rub=round(
+            cost,
+            2,
+        ),
+    )
+
+    cart = await db.get_cart(
+        message.from_user.id
     )
 
     total = await db.get_cart_total(
         message.from_user.id
     )
 
-    await state.clear()
+    # -----------------------------------------------------
+    # БЛОК ВЕСА
+    # -----------------------------------------------------
+
+    if (
+        weight_estimated
+        and min_weight is not None
+        and max_weight is not None
+    ):
+
+        weight_block = (
+
+            f"🤖 Примерный вес 1 шт.: "
+            f"<b>{min_weight:.2f}–"
+            f"{max_weight:.2f} кг</b>\n"
+
+            "⚠️ Вес ориентировочный\n"
+
+            "🚚 Доставка: "
+            "<b>уточняется после "
+            "фактического взвешивания</b>"
+        )
+
+    else:
+
+        weight_block = (
+
+            "⚖️ Вес: будет уточнён "
+            "после фактического взвешивания\n"
+
+            "🚚 Доставка: уточняется "
+            "после взвешивания"
+        )
 
     await message.answer(
-        f"✅ Цена обновлена.\n"
-        f"Новая стоимость товара: "
-        f"{product_cost:.0f} ₽\n"
-        f"Общая сумма к оплате сейчас: "
-        f"{total:.0f} ₽",
+
+        f"✅ <b>Товар №{len(cart)} добавлен "
+        "в корзину.</b>\n\n"
+
+        f"💴 Цена: "
+        f"{price_yuan:.2f} ¥\n"
+
+        f"🔢 Количество: "
+        f"{quantity} шт.\n\n"
+
+        f"💰 Стоимость товара: "
+        f"<b>{cost:.0f} ₽</b>\n\n"
+
+        f"{weight_block}\n\n"
+
+        f"💳 <b>К оплате сейчас: "
+        f"{cost:.0f} ₽</b>\n\n"
+
+        f"🛒 Общая сумма товаров: "
+        f"<b>{total:.0f} ₽</b>",
+
+        reply_markup=after_item_added_kb(),
+    )
+
+    await message.answer(
+        "Выберите действие.",
         reply_markup=main_menu,
     )
 
-
-@router.callback_query(
-    F.data == "clear_cart"
-)
-async def clear_cart_cb(
-    callback: CallbackQuery,
-):
-    await db.clear_cart(
-        callback.from_user.id
-    )
-
-    await callback.message.answer(
-        "🗑 Корзина очищена.",
-        reply_markup=main_menu,
-    )
-
-    await callback.answer()
-
-
-@router.callback_query(
-    F.data == "send_to_manager"
-)
-async def send_to_manager(
-    callback: CallbackQuery,
-    bot: Bot,
-):
-    user_id = callback.from_user.id
-
-    items = await db.get_cart(
-        user_id
-    )
-
-    if not items:
-        await callback.answer(
-            "Корзина пуста",
-            show_alert=True,
-        )
-
-        return
-
-    # Создаём заявку.
-    # При этом database.py автоматически
-    # создаст постоянный код клиента.
-    order_id = await db.create_order_from_cart(
-        user_id
-    )
-
-    if order_id is None:
-        await callback.answer(
-            "Не удалось создать заявку",
-            show_alert=True,
-        )
-
-        return
-
-    order = await db.get_order(
-        order_id
-    )
-
-    client_code = await db.get_or_create_client_code(
-        user_id
-    )
-
-    order_items = await db.get_order_items(
-        order_id
-    )
-
-    user = callback.from_user
-
-    header = (
-        f"📦 Новая заявка №{order_id}\n"
-        f"👤 Код клиента: {client_code}\n"
-        f"От: {user.full_name} "
-        f"(@{user.username or '—'}, id {user.id})\n\n"
-    )
-
-    body = "\n\n".join(
-        _item_text(item)
-        for item in order_items
-    )
-
-    footer = (
-        f"\n\n"
-        f"Итого к оплате сейчас: "
-        f"{order['total_rub']:.0f} ₽\n"
-        f"Статус: {order['status']}"
-    )
-
-    if MANAGER_CHAT_ID:
-        await bot.send_message(
-            MANAGER_CHAT_ID,
-            header + body + footer,
-            reply_markup=admin_status_kb(
-                order_id
-            ),
-        )
-
-    await callback.message.answer(
-        f"✅ Заявка №{order_id} "
-        f"отправлена менеджеру!\n\n"
-        f"🆔 Ваш код клиента: "
-        f"<b>{client_code}</b>\n\n"
-        f"Сохраните этот код — он закреплён "
-        f"за вами.\n\n"
-        f"Итого к оплате сейчас: "
-        f"{order['total_rub']:.0f} ₽",
-        reply_markup=main_menu,
-    )
-
-    await callback.answer()
+    await state.clear()
