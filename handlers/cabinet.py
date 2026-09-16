@@ -1,12 +1,12 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
 import database as db
-from states import CabinetStates
 from keyboards import main_menu
 
 router = Router()
+
 
 STATUS_EMOJI = {
     "Новая": "🆕",
@@ -20,46 +20,76 @@ STATUS_EMOJI = {
 
 
 @router.message(F.text == "👤 Личный кабинет")
-async def cabinet(message: Message, state: FSMContext):
-    user = await db.get_user(message.from_user.id)
-    if user and user["phone"]:
+async def cabinet(
+    message: Message,
+    state: FSMContext,
+):
+    await state.clear()
+
+    orders = await db.get_user_orders(
+        message.from_user.id
+    )
+
+    # Если заказов ещё нет — код пока не создаём.
+    if not orders:
         await message.answer(
-            f"👤 Личный кабинет\n\n"
-            f"Имя: {user['full_name']}\n"
-            f"Телефон: {user['phone']}\n"
-            f"Telegram: @{user['username'] or '—'}",
+            "👤 <b>Личный кабинет</b>\n\n"
+            "🆔 Код клиента: пока не присвоен\n\n"
+            "Оформите первый заказ — после его отправки "
+            "менеджеру бот автоматически закрепит за вами "
+            "персональный код клиента.",
             reply_markup=main_menu,
         )
-    else:
-        await state.set_state(CabinetStates.waiting_phone)
-        await message.answer(
-            "Для личного кабинета укажите номер телефона для связи (например: +79991234567):"
-        )
+        return
 
+    client_code = await db.get_or_create_client_code(
+        message.from_user.id
+    )
 
-@router.message(CabinetStates.waiting_phone, F.text)
-async def got_phone(message: Message, state: FSMContext):
-    await db.set_phone(message.from_user.id, message.text.strip())
-    await state.clear()
-    await message.answer("✅ Телефон сохранён.", reply_markup=main_menu)
+    await message.answer(
+        "👤 <b>Личный кабинет</b>\n\n"
+        f"🆔 Ваш код клиента: <b>{client_code}</b>\n\n"
+        f"{await _orders_text(message.from_user.id)}",
+        reply_markup=main_menu,
+    )
 
 
 async def _orders_text(user_id: int) -> str:
     orders = await db.get_user_orders(user_id)
+
     if not orders:
-        return "У вас пока нет заявок."
-    lines = ["📨 Ваши заявки:\n"]
-    for o in orders:
-        emoji = STATUS_EMOJI.get(o["status"], "•")
-        lines.append(f"{emoji} Заявка №{o['id']} — {o['total_rub']:.0f} ₽ — {o['status']}")
+        return "📨 У вас пока нет заявок."
+
+    lines = [
+        "📨 <b>Ваши заявки:</b>\n"
+    ]
+
+    for order in orders:
+        emoji = STATUS_EMOJI.get(
+            order["status"],
+            "•",
+        )
+
+        lines.append(
+            f"{emoji} Заявка №{order['id']} — "
+            f"{order['total_rub']:.0f} ₽ — "
+            f"{order['status']}"
+        )
+
     return "\n".join(lines)
 
 
 @router.message(F.text == "📨 Мои заявки")
 async def my_orders(message: Message):
-    await message.answer(await _orders_text(message.from_user.id), reply_markup=main_menu)
+    await message.answer(
+        await _orders_text(message.from_user.id),
+        reply_markup=main_menu,
+    )
 
 
 @router.message(F.text == "🔄 Обновить статусы")
 async def refresh_statuses(message: Message):
-    await message.answer(await _orders_text(message.from_user.id), reply_markup=main_menu)
+    await message.answer(
+        await _orders_text(message.from_user.id),
+        reply_markup=main_menu,
+    )
