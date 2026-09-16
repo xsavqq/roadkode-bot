@@ -1,268 +1,410 @@
 from aiogram import Router, F, Bot
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery,
+    Message,
+)
 from aiogram.fsm.context import FSMContext
 
 import database as db
+
 from config import (
     MANAGER_CHAT_ID,
-    PRICE_PER_KG,
-    REFERRAL_BONUS_PER_KG,
+    calc_cost,
 )
-from states import AdminStates
+
+from states import EditItemStates
+
+from keyboards import (
+    cart_footer_kb,
+    cart_item_kb,
+    admin_status_kb,
+    main_menu,
+)
+
 
 router = Router()
 
 
-def _is_manager(message: Message) -> bool:
-    """
-    Проверяем, что действие выполняется в чате менеджера.
+# =========================================================
+# ТЕКСТ ТОВАРА
+# =========================================================
 
-    MANAGER_CHAT_ID должен совпадать с Telegram ID личного чата
-    менеджера либо с ID группы менеджеров.
-    """
-    return bool(MANAGER_CHAT_ID and message.chat.id == MANAGER_CHAT_ID)
+def _item_text(item) -> str:
 
-
-def _is_manager_callback(callback: CallbackQuery) -> bool:
-    """
-    Проверка callback от менеджера.
-
-    Callback-кнопки для изменения статуса и веса должны работать
-    только внутри чата менеджера.
-    """
-    if not MANAGER_CHAT_ID or not callback.message:
-        return False
-
-    return callback.message.chat.id == MANAGER_CHAT_ID
-
-
-def _manager_item_text(item) -> str:
     lines = [
-        f"Товар: {item['link'] or '📎 фото / без ссылки'}",
-        f"Цена: {item['price_yuan']:.0f} ¥ × {item['quantity']} шт.",
-        f"Размер: {item['size'] or 'не указан'}",
+
+        f"🔗 Товар: "
+        f"{item['link'] or '📎 без ссылки'}",
+
+        f"💴 Цена: "
+        f"{item['price_yuan']:.2f} ¥",
+
+        f"🔢 Количество: "
+        f"{item['quantity']} шт.",
+
+        f"📏 Размер: "
+        f"{item['size'] or 'не указан'}",
     ]
 
-    if item["weight_estimated"]:
-        min_weight = item["weight_min_kg"]
-        max_weight = item["weight_max_kg"]
+    # -----------------------------------------------------
+    # AI ВЕС
+    # -----------------------------------------------------
 
-        if min_weight is not None and max_weight is not None:
+    if item["weight_estimated"]:
+
+        min_weight = item[
+            "weight_min_kg"
+        ]
+
+        max_weight = item[
+            "weight_max_kg"
+        ]
+
+        if (
+            min_weight is not None
+            and max_weight is not None
+        ):
+
             lines.append(
-                f"🤖 Примерный вес 1 шт.: "
-                f"{min_weight:.2f}–{max_weight:.2f} кг"
+                "🤖 Примерный вес 1 шт.: "
+                f"{min_weight:.2f}–"
+                f"{max_weight:.2f} кг"
             )
 
-        lines.append("⚠️ Вес ориентировочный")
         lines.append(
-            "🚚 Доставка: НЕ включена — "
-            "уточнить после фактического взвешивания"
-        )
-        lines.append(
-            f"💰 К оплате сейчас: {item['cost_rub']:.0f} ₽"
+            "⚠️ Вес ориентировочный"
         )
 
-    elif item["weight_kg"]:
         lines.append(
-            f"⚖️ Вес: {item['weight_kg']:.2f} кг"
+            "🚚 Доставка: "
+            "не включена — "
+            "уточняется после "
+            "фактического взвешивания"
+        )
+
+        lines.append(
+            f"💰 К оплате сейчас: "
+            f"{item['cost_rub']:.0f} ₽"
+        )
+
+    # -----------------------------------------------------
+    # ФАКТИЧЕСКИЙ ВЕС
+    # -----------------------------------------------------
+
+    elif item["weight_kg"]:
+
+        lines.append(
+            f"⚖️ Вес: "
+            f"{item['weight_kg']:.2f} кг"
         )
 
         if item["shipping_rub"]:
+
             lines.append(
-                f"🚚 Доставка: {item['shipping_rub']:.0f} ₽"
+                f"🚚 Доставка: "
+                f"{item['shipping_rub']:.0f} ₽"
             )
 
         lines.append(
-            f"💰 Стоимость: {item['cost_rub']:.0f} ₽"
+            f"💰 Стоимость: "
+            f"{item['cost_rub']:.0f} ₽"
         )
 
     else:
-        lines.append("⚖️ Вес: не указан")
+
         lines.append(
-            f"💰 Стоимость: {item['cost_rub']:.0f} ₽"
+            "⚖️ Вес: будет определён "
+            "после взвешивания"
+        )
+
+        lines.append(
+            f"💰 Стоимость товара: "
+            f"{item['cost_rub']:.0f} ₽"
         )
 
     return "\n".join(lines)
 
 
 # =========================================================
-# ИЗМЕНЕНИЕ СТАТУСА ЗАКАЗА
+# ПРОСМОТР КОРЗИНЫ
 # =========================================================
 
-@router.callback_query(F.data.startswith("set_status:"))
-async def set_status(
+@router.callback_query(
+    F.data == "view_cart"
+)
+async def view_cart(
     callback: CallbackQuery,
-    bot: Bot,
 ):
-    if not _is_manager_callback(callback):
-        await callback.answer(
-            "⛔ У вас нет доступа.",
-            show_alert=True,
-        )
-        return
 
-    try:
-        _, order_id_str, status = callback.data.split(":", 2)
-        order_id = int(order_id_str)
-    except (ValueError, AttributeError):
-        await callback.answer(
-            "⚠️ Некорректные данные.",
-            show_alert=True,
-        )
-        return
-
-    order = await db.get_order(order_id)
-
-    if order is None:
-        await callback.answer(
-            "⚠️ Заявка не найдена.",
-            show_alert=True,
-        )
-        return
-
-    await db.set_order_status(order_id, status)
-
-    order = await db.get_order(order_id)
-    order_items = await db.get_order_items(order_id)
-
-    original_text = callback.message.text or ""
-
-    if "\n\n" in original_text:
-        header = original_text.split("\n\n", 1)[0]
-    else:
-        header = original_text
-
-    body = "\n\n".join(
-        _manager_item_text(item)
-        for item in order_items
+    await show_cart(
+        callback
     )
 
-    weight_line = ""
 
-    if order["weight_set"] and order["weight_kg"] is not None:
-        weight_line = (
-            f"\n⚖️ Фактический вес заказа: "
-            f"{order['weight_kg']:.2f} кг"
-        )
+@router.message(
+    F.text == "🛒 Посмотреть корзину"
+)
+async def view_cart_msg(
+    message: Message,
+):
 
-    manager_text = (
-        f"{header}\n\n"
-        f"{body}\n\n"
-        f"Итого к оплате сейчас: "
-        f"{order['total_rub']:.0f} ₽"
-        f"{weight_line}\n"
-        f"Статус: {status}"
+    items = await db.get_cart(
+        message.from_user.id
     )
 
-    try:
-        await callback.message.edit_text(
-            manager_text,
-            reply_markup=callback.message.reply_markup,
-        )
-    except Exception:
-        pass
+    if not items:
 
-    await callback.answer(
-        f"Статус изменён: {status}"
+        await message.answer(
+            "🛒 <b>Корзина пуста.</b>",
+            reply_markup=main_menu,
+        )
+
+        return
+
+    for item in items:
+
+        text = _item_text(item)
+
+        if item["photo_id"]:
+
+            await message.answer_photo(
+                item["photo_id"],
+                caption=text,
+                reply_markup=cart_item_kb(
+                    item["id"]
+                ),
+            )
+
+        else:
+
+            await message.answer(
+                text,
+                reply_markup=cart_item_kb(
+                    item["id"]
+                ),
+            )
+
+    total = await db.get_cart_total(
+        message.from_user.id
     )
 
-    # Уведомляем клиента
-    try:
-        await bot.send_message(
-            order["user_id"],
-            f"🔔 <b>Обновление заявки №{order_id}</b>\n\n"
-            f"Статус: <b>{status}</b>",
-        )
-    except Exception as exc:
-        print(
-            "CLIENT STATUS NOTIFICATION ERROR:",
-            repr(exc),
-            flush=True,
-        )
+    await message.answer(
+
+        f"🛒 <b>Общая сумма товаров:</b> "
+        f"{total:.0f} ₽\n\n"
+
+        "🚚 Доставка не включена.\n"
+        "Она будет рассчитана после "
+        "фактического взвешивания.",
+
+        reply_markup=cart_footer_kb(),
+    )
 
 
-# =========================================================
-# ВВОД ФАКТИЧЕСКОГО ВЕСА
-# =========================================================
-
-@router.callback_query(F.data.startswith("set_weight:"))
-async def ask_order_weight(
+async def show_cart(
     callback: CallbackQuery,
-    state: FSMContext,
 ):
-    if not _is_manager_callback(callback):
-        await callback.answer(
-            "⛔ У вас нет доступа.",
-            show_alert=True,
-        )
-        return
 
-    try:
-        order_id = int(
-            callback.data.split(":", 1)[1]
-        )
-    except (ValueError, AttributeError):
-        await callback.answer(
-            "⚠️ Некорректный номер заявки.",
-            show_alert=True,
-        )
-        return
+    user_id = callback.from_user.id
 
-    order = await db.get_order(order_id)
-
-    if order is None:
-        await callback.answer(
-            "⚠️ Заявка не найдена.",
-            show_alert=True,
-        )
-        return
-
-    if order["weight_set"]:
-        await callback.answer(
-            "⚠️ Вес этой заявки уже указан.",
-            show_alert=True,
-        )
-        return
-
-    await state.set_state(
-        AdminStates.waiting_order_weight
+    items = await db.get_cart(
+        user_id
     )
 
-    await state.update_data(
-        order_id=order_id
+    if not items:
+
+        await callback.message.answer(
+            "🛒 <b>Корзина пуста.</b>",
+            reply_markup=main_menu,
+        )
+
+        await callback.answer()
+
+        return
+
+    for item in items:
+
+        text = _item_text(item)
+
+        if item["photo_id"]:
+
+            await callback.message.answer_photo(
+                item["photo_id"],
+                caption=text,
+                reply_markup=cart_item_kb(
+                    item["id"]
+                ),
+            )
+
+        else:
+
+            await callback.message.answer(
+                text,
+                reply_markup=cart_item_kb(
+                    item["id"]
+                ),
+            )
+
+    total = await db.get_cart_total(
+        user_id
     )
 
     await callback.message.answer(
-        f"⚖️ <b>Фактический вес заявки №{order_id}</b>\n\n"
-        f"Введите вес заказа в кг.\n"
-        f"Например: <b>1.4</b>\n\n"
-        f"🚚 Доставка считается:\n"
-        f"<b>вес × {PRICE_PER_KG:.0f} ₽/кг</b>"
+
+        f"🛒 <b>Общая сумма товаров:</b> "
+        f"{total:.0f} ₽\n\n"
+
+        "🚚 Доставка не включена.\n"
+        "Она будет рассчитана после "
+        "фактического взвешивания.",
+
+        reply_markup=cart_footer_kb(),
     )
 
     await callback.answer()
 
 
 # =========================================================
-# ОБРАБОТКА ФАКТИЧЕСКОГО ВЕСА
+# УДАЛЕНИЕ ТОВАРА
+# =========================================================
+
+@router.callback_query(
+    F.data.startswith("del_item:")
+)
+async def delete_item(
+    callback: CallbackQuery,
+):
+
+    try:
+
+        item_id = int(
+            callback.data.split(":")[1]
+        )
+
+    except (
+        ValueError,
+        IndexError,
+    ):
+
+        await callback.answer(
+            "⚠️ Ошибка.",
+            show_alert=True,
+        )
+
+        return
+
+    await db.delete_cart_item(
+        item_id,
+        callback.from_user.id,
+    )
+
+    total = await db.get_cart_total(
+        callback.from_user.id
+    )
+
+    try:
+
+        await callback.message.edit_reply_markup(
+            reply_markup=None
+        )
+
+    except Exception:
+        pass
+
+    await callback.message.answer(
+
+        f"🗑 <b>Товар удалён.</b>\n\n"
+        f"Общая сумма товаров: "
+        f"<b>{total:.0f} ₽</b>",
+
+        reply_markup=main_menu,
+    )
+
+    await callback.answer(
+        "Удалено"
+    )
+
+
+# =========================================================
+# НАЧАЛО РЕДАКТИРОВАНИЯ
+# =========================================================
+
+@router.callback_query(
+    F.data.startswith("edit_item:")
+)
+async def edit_item_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+
+    try:
+
+        item_id = int(
+            callback.data.split(":")[1]
+        )
+
+    except (
+        ValueError,
+        IndexError,
+    ):
+
+        await callback.answer(
+            "⚠️ Ошибка.",
+            show_alert=True,
+        )
+
+        return
+
+    item = await db.get_cart_item(
+        item_id,
+        callback.from_user.id,
+    )
+
+    if not item:
+
+        await callback.answer(
+            "Товар не найден.",
+            show_alert=True,
+        )
+
+        return
+
+    await state.set_state(
+        EditItemStates.waiting_new_price
+    )
+
+    await state.update_data(
+        item_id=item_id
+    )
+
+    await callback.message.answer(
+
+        f"💴 Текущая цена: "
+        f"<b>{item['price_yuan']:.2f} ¥</b>\n"
+
+        f"🔢 Количество: "
+        f"<b>{item['quantity']} шт.</b>\n\n"
+
+        "Введите новую цену в юанях.\n"
+        "Только число.",
+
+    )
+
+    await callback.answer()
+
+
+# =========================================================
+# НОВАЯ ЦЕНА
 # =========================================================
 
 @router.message(
-    AdminStates.waiting_order_weight,
+    EditItemStates.waiting_new_price,
     F.text,
 )
-async def got_order_weight(
+async def edit_item_price(
     message: Message,
     state: FSMContext,
-    bot: Bot,
 ):
-    if not _is_manager(message):
-        await state.clear()
-
-        await message.answer(
-            "⛔ У вас нет доступа."
-        )
-        return
 
     raw = (
         message.text
@@ -271,121 +413,274 @@ async def got_order_weight(
     )
 
     try:
-        weight = float(raw)
 
-        if weight <= 0:
-            raise ValueError
+        price = float(raw)
 
-        if weight > 500:
+        if price <= 0:
             raise ValueError
 
     except ValueError:
+
         await message.answer(
-            "⚠️ Введите корректный вес.\n\n"
-            "Например: <b>1.4</b>"
+            "⚠️ Нужно отправить число.\n\n"
+            "Например: <b>47</b> или <b>47.5</b>"
         )
+
         return
 
     data = await state.get_data()
-    order_id = data.get("order_id")
 
-    if not order_id:
+    item_id = data.get(
+        "item_id"
+    )
+
+    if not item_id:
+
         await state.clear()
 
         await message.answer(
-            "⚠️ Не удалось определить заявку."
+            "⚠️ Не удалось определить товар.",
+            reply_markup=main_menu,
         )
+
         return
 
-    result = await db.set_order_weight(
-        order_id,
-        weight,
-        PRICE_PER_KG,
-        REFERRAL_BONUS_PER_KG,
+    item = await db.get_cart_item(
+        item_id,
+        message.from_user.id,
+    )
+
+    if not item:
+
+        await state.clear()
+
+        await message.answer(
+            "⚠️ Товар не найден.",
+            reply_markup=main_menu,
+        )
+
+        return
+
+    product_cost = calc_cost(
+        price,
+        item["quantity"],
+    )
+
+    shipping = (
+        item["shipping_rub"]
+        or 0
+    )
+
+    if item["weight_estimated"]:
+
+        new_cost = round(
+            product_cost,
+            2,
+        )
+
+    else:
+
+        new_cost = round(
+            product_cost + shipping,
+            2,
+        )
+
+    # Удаляем старый товар
+    await db.delete_cart_item(
+        item["id"],
+        message.from_user.id,
+    )
+
+    # Создаём обновлённый
+    await db.add_cart_item(
+
+        user_id=(
+            message.from_user.id
+        ),
+
+        link=item["link"],
+
+        photo_id=item["photo_id"],
+
+        price_yuan=price,
+
+        quantity=item["quantity"],
+
+        size=item["size"],
+
+        weight_kg=item["weight_kg"],
+
+        weight_min_kg=(
+            item["weight_min_kg"]
+        ),
+
+        weight_max_kg=(
+            item["weight_max_kg"]
+        ),
+
+        weight_estimated=bool(
+            item["weight_estimated"]
+        ),
+
+        shipping_rub=shipping,
+
+        cost_rub=new_cost,
+    )
+
+    total = await db.get_cart_total(
+        message.from_user.id
     )
 
     await state.clear()
 
-    if result is None:
-        await message.answer(
-            "⚠️ Заявка не найдена."
-        )
-        return
-
-    if result.get("already_set"):
-        await message.answer(
-            "⚠️ Вес для этой заявки уже был указан ранее."
-        )
-        return
-
-    order = await db.get_order(order_id)
-
-    if order is None:
-        await message.answer(
-            "⚠️ Заявка не найдена после обновления."
-        )
-        return
-
-    shipping = result["shipping_rub"]
-    new_total = result["new_total"]
-
-    # Сообщение менеджеру
     await message.answer(
-        f"✅ <b>Вес заявки №{order_id} сохранён</b>\n\n"
-        f"⚖️ Фактический вес: <b>{weight:.2f} кг</b>\n"
-        f"🚚 Доставка: <b>{shipping:.0f} ₽</b>\n"
-        f"💰 Новый итог: <b>{new_total:.0f} ₽</b>"
+
+        "✅ <b>Цена обновлена.</b>\n\n"
+
+        f"Новая стоимость товара: "
+        f"<b>{product_cost:.0f} ₽</b>\n\n"
+
+        f"Общая сумма товаров: "
+        f"<b>{total:.0f} ₽</b>",
+
+        reply_markup=main_menu,
     )
 
-    # =====================================================
-    # УВЕДОМЛЕНИЕ КЛИЕНТУ
-    # =====================================================
 
-    try:
+# =========================================================
+# ОЧИСТКА КОРЗИНЫ
+# =========================================================
+
+@router.callback_query(
+    F.data == "clear_cart"
+)
+async def clear_cart_cb(
+    callback: CallbackQuery,
+):
+
+    await db.clear_cart(
+        callback.from_user.id
+    )
+
+    await callback.message.answer(
+        "🗑 <b>Корзина очищена.</b>",
+        reply_markup=main_menu,
+    )
+
+    await callback.answer()
+
+
+# =========================================================
+# ОТПРАВКА МЕНЕДЖЕРУ
+# =========================================================
+
+@router.callback_query(
+    F.data == "send_to_manager"
+)
+async def send_to_manager(
+    callback: CallbackQuery,
+    bot: Bot,
+):
+
+    user_id = callback.from_user.id
+
+    items = await db.get_cart(
+        user_id
+    )
+
+    if not items:
+
+        await callback.answer(
+            "Корзина пуста.",
+            show_alert=True,
+        )
+
+        return
+
+    order_id = await db.create_order_from_cart(
+        user_id
+    )
+
+    if not order_id:
+
+        await callback.answer(
+            "Не удалось создать заявку.",
+            show_alert=True,
+        )
+
+        return
+
+    order = await db.get_order(
+        order_id
+    )
+
+    order_items = await db.get_order_items(
+        order_id
+    )
+
+    user = callback.from_user
+
+    header = (
+
+        f"📦 <b>Новая заявка №{order_id}</b>\n\n"
+
+        f"👤 Клиент: "
+        f"{user.full_name}\n"
+
+        f"Telegram: "
+        f"@{user.username or '—'}\n"
+
+        f"ID: <code>{user.id}</code>\n\n"
+    )
+
+    body = "\n\n".join(
+        _item_text(item)
+        for item in order_items
+    )
+
+    footer = (
+
+        f"\n\n💰 <b>Итого товаров:</b> "
+        f"{order['total_rub']:.0f} ₽\n\n"
+
+        "🚚 Доставка: "
+        "<b>уточняется после "
+        "фактического взвешивания</b>\n\n"
+
+        f"📌 Статус: "
+        f"<b>{order['status']}</b>"
+    )
+
+    if MANAGER_CHAT_ID:
+
         await bot.send_message(
-            order["user_id"],
-            f"⚖️ <b>Заявка №{order_id} взвешена</b>\n\n"
-            f"Фактический вес: <b>{weight:.2f} кг</b>\n"
-            f"🚚 Доставка: <b>{shipping:.0f} ₽</b>\n\n"
-            f"💰 Итоговая сумма заказа: "
-            f"<b>{new_total:.0f} ₽</b>",
+
+            MANAGER_CHAT_ID,
+
+            header
+            + body
+            + footer,
+
+            reply_markup=admin_status_kb(
+                order_id,
+                weight_set=bool(
+                    order["weight_set"]
+                ),
+            ),
         )
 
-    except Exception as exc:
-        print(
-            "CLIENT WEIGHT NOTIFICATION ERROR:",
-            repr(exc),
-            flush=True,
-        )
+    await callback.message.answer(
 
-    # =====================================================
-    # РЕФЕРАЛЬНЫЙ БОНУС
-    # =====================================================
+        f"✅ <b>Заявка №{order_id} "
+        "отправлена менеджеру!</b>\n\n"
 
-    referred_by = result.get("referred_by")
-    bonus_credited = result.get(
-        "bonus_credited",
-        0,
+        f"💰 Сумма товаров: "
+        f"<b>{order['total_rub']:.0f} ₽</b>\n\n"
+
+        "🚚 Доставка будет рассчитана "
+        "после фактического взвешивания.",
+
+        reply_markup=main_menu,
     )
 
-    if referred_by and bonus_credited > 0:
-        try:
-            await bot.send_message(
-                referred_by,
-                f"🎁 <b>Вам начислен реферальный бонус!</b>\n\n"
-                f"Ваш реферал оформил заказ.\n"
-                f"Вес заказа: <b>{weight:.2f} кг</b>\n\n"
-                f"💰 Начислено: "
-                f"<b>{bonus_credited:.0f} ₽</b>\n\n"
-                "Бонус можно использовать как скидку "
-                "на следующий заказ.\n\n"
-                "Проверить баланс можно в "
-                "«👤 Личный кабинет».",
-            )
-
-        except Exception as exc:
-            print(
-                "REFERRAL BONUS NOTIFICATION ERROR:",
-                repr(exc),
-                flush=True,
-            )
+    await callback.answer()
