@@ -1,6 +1,7 @@
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.filters.command import CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 import database as db
@@ -12,6 +13,7 @@ from config import (
 )
 
 from keyboards import main_menu
+from screens import drop_reply_kb, send_home
 
 
 router = Router()
@@ -98,7 +100,10 @@ ABOUT_TEXT = (
 async def cmd_start(
     message: Message,
     command: CommandObject,
+    state: FSMContext,
 ):
+    await state.clear()
+
     referred_by = None
 
     # -----------------------------------------------------
@@ -127,13 +132,16 @@ async def cmd_start(
     )
 
     # -----------------------------------------------------
-    # ОТПРАВЛЯЕМ ПРИВЕТСТВИЕ
+    # УБИРАЕМ СТАРУЮ КЛАВИАТУРУ СНИЗУ (если она ещё висит)
     # -----------------------------------------------------
 
-    await message.answer(
-        WELCOME_TEXT,
-        reply_markup=main_menu,
-    )
+    await drop_reply_kb(message)
+
+    # -----------------------------------------------------
+    # ГЛАВНЫЙ ЭКРАН: БАННЕР + INLINE-КНОПКИ
+    # -----------------------------------------------------
+
+    await send_home(message)
 
 
 # =========================================================
