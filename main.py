@@ -10,6 +10,7 @@ from config import BOT_TOKEN
 import database as db
 
 from handlers import start
+from handlers import menu
 from handlers import order
 from handlers import cart
 from handlers import cabinet
@@ -48,6 +49,7 @@ async def main():
     # =====================================================
 
     dp.include_router(start.router)
+    dp.include_router(menu.router)
     dp.include_router(order.router)
     dp.include_router(cart.router)
     dp.include_router(cabinet.router)
