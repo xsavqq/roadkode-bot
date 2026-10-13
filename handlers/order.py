@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 import database as db
 from ai_vision import estimate_weight_from_image
 from config import calc_cost, yuan_rate_text
+from screens import drop_reply_kb
 from states import OrderStates
 
 from keyboards import (
@@ -30,6 +31,8 @@ async def cancel_order(
     state: FSMContext,
 ):
     await state.clear()
+
+    await drop_reply_kb(message)
 
     await message.answer(
         "❌ Оформление заказа отменено.\n\n"
@@ -629,6 +632,8 @@ async def save_item(
     # -------------------------------------------------
     # ВОЗВРАЩАЕМ ГЛАВНОЕ МЕНЮ
     # -------------------------------------------------
+
+    await drop_reply_kb(message)
 
     await message.answer(
         "Выберите действие.",
