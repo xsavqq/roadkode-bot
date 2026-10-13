@@ -102,6 +102,25 @@ CLOSED_CHANNEL_URL = os.getenv(
 )
 
 
+# Ссылка для кнопки «Отзывы» (по умолчанию — основной канал)
+REVIEWS_URL = os.getenv(
+    "REVIEWS_URL",
+    CLOSED_CHANNEL_URL,
+)
+
+# Ссылка для кнопки «Ассортимент» (по умолчанию — основной канал)
+ASSORTMENT_URL = os.getenv(
+    "ASSORTMENT_URL",
+    CLOSED_CHANNEL_URL,
+)
+
+# Баннер главного экрана (если файла нет — бот шлёт просто текст)
+BANNER_PATH = os.getenv(
+    "BANNER_PATH",
+    "assets/banner.jpg",
+)
+
+
 # =========================================================
 # НАЗВАНИЕ / БАЗА
 # =========================================================
@@ -167,3 +186,45 @@ def yuan_rate_text() -> str:
         "Стоимость товара рассчитывается "
         "по этому курсу с учётом комиссии сервиса."
     )
+
+
+def manager_url() -> str:
+    """
+    Ссылка t.me на менеджера для url-кнопок.
+    """
+
+    return (
+        "https://t.me/"
+        + MANAGER_USERNAME.lstrip("@")
+    )
+
+
+def calc_breakdown(
+    price_yuan: float,
+    weight_kg: float | None = None,
+) -> dict:
+    """
+    Разбивка для калькулятора: товар / комиссия / доставка / итого.
+
+    Использует те же формулы, что и calc_cost / calc_shipping,
+    поэтому сумма товара + комиссии = calc_cost(price, 1).
+    """
+
+    total_goods = calc_cost(price_yuan, 1)
+
+    goods = round(price_yuan * EXCHANGE_RATE, 2)
+
+    commission = round(total_goods - goods, 2)
+
+    shipping = (
+        calc_shipping(weight_kg)
+        if weight_kg
+        else 0.0
+    )
+
+    return {
+        "goods": goods,
+        "commission": commission,
+        "shipping": shipping,
+        "total": round(total_goods + shipping, 2),
+    }
