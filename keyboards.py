@@ -1,3 +1,9 @@
+from config import (
+    ASSORTMENT_URL,
+    REVIEWS_URL,
+    manager_url,
+)
+
 from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
@@ -6,7 +12,10 @@ from aiogram.types import (
 )
 
 
-main_menu = ReplyKeyboardMarkup(
+# Старая клавиатура снизу экрана. Не используется для показа,
+# оставлена для совместимости (текстовые хендлеры по-прежнему
+# реагируют на её кнопки у тех, у кого она ещё висит).
+legacy_main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🛒 Новый заказ")],
         [
@@ -22,6 +31,102 @@ main_menu = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
+
+
+def main_inline_kb() -> InlineKeyboardMarkup:
+    """
+    Главное меню: inline-кнопки в две колонки.
+    """
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛒 Сделать заказ",
+                    callback_data="menu:order",
+                ),
+                InlineKeyboardButton(
+                    text="📦 Мои заказы",
+                    callback_data="menu:track",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🧮 Калькулятор",
+                    callback_data="menu:calc",
+                ),
+                InlineKeyboardButton(
+                    text="🛍 Ассортимент",
+                    url=ASSORTMENT_URL,
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⭐ Отзывы",
+                    url=REVIEWS_URL,
+                ),
+                InlineKeyboardButton(
+                    text="❓ FAQ",
+                    callback_data="menu:faq",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="👥 Пригласить друга",
+                    callback_data="menu:ref",
+                ),
+                InlineKeyboardButton(
+                    text="🎁 Бонусы",
+                    callback_data="menu:bonus",
+                ),
+            ],
+        ]
+    )
+
+
+# Везде, где раньше показывалась нижняя клавиатура,
+# теперь показывается inline-меню под сообщением.
+main_menu = main_inline_kb()
+
+
+def back_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🏠 В меню",
+                    callback_data="menu:home",
+                )
+            ]
+        ]
+    )
+
+
+def calc_result_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛒 Сделать заказ",
+                    callback_data="menu:order",
+                ),
+                InlineKeyboardButton(
+                    text="💬 Написать менеджеру",
+                    url=manager_url(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔁 Посчитать ещё",
+                    callback_data="menu:calc",
+                ),
+                InlineKeyboardButton(
+                    text="🏠 В меню",
+                    callback_data="menu:home",
+                ),
+            ],
+        ]
+    )
 
 
 cancel_kb = ReplyKeyboardMarkup(
