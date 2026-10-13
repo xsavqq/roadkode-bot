@@ -55,3 +55,14 @@ class AdminStates(StatesGroup):
 
     # Менеджер вводит фактический вес заказа
     waiting_order_weight = State()
+
+
+# =========================================================
+# КАЛЬКУЛЯТОР (без оформления заказа)
+# =========================================================
+
+class CalcStates(StatesGroup):
+
+    waiting_price = State()
+
+    waiting_weight = State()
