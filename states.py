@@ -7,6 +7,9 @@ from aiogram.fsm.state import State, StatesGroup
 
 class OrderStates(StatesGroup):
 
+    # Шаг 1: выбор категории (inline-кнопки)
+    choosing_category = State()
+
     # Ссылка на товар
     waiting_link = State()
 

@@ -114,6 +114,14 @@ ASSORTMENT_URL = os.getenv(
     CLOSED_CHANNEL_URL,
 )
 
+# Картинки-инструкции шагов заказа
+STEP_IMAGES = {
+    "category": "assets/step_category.jpg",
+    "link": "assets/step_link.jpg",
+    "size": "assets/step_size.jpg",
+    "price": "assets/step_price.jpg",
+}
+
 # Баннер главного экрана (если файла нет — бот шлёт просто текст)
 BANNER_PATH = os.getenv(
     "BANNER_PATH",

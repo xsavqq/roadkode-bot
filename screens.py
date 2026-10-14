@@ -8,6 +8,7 @@ from aiogram.types import (
 )
 
 from config import (
+    STEP_IMAGES,
     BANNER_PATH,
     EXCHANGE_RATE,
     PRICE_PER_KG,
@@ -94,3 +95,44 @@ async def drop_reply_kb(message: Message) -> None:
         await tmp.delete()
     except Exception:
         pass
+
+
+# file_id картинок шагов после первой отправки
+_step_file_ids: dict[str, str] = {}
+
+
+async def send_step(
+    message: Message,
+    key: str,
+    caption: str,
+    reply_markup=None,
+):
+    """
+    Шаг заказа: картинка-инструкция + подпись одним сообщением.
+    Если файла нет или Telegram его не принял — просто текст.
+    """
+
+    path = STEP_IMAGES.get(key)
+
+    if path and (_step_file_ids.get(key) or os.path.exists(path)):
+
+        try:
+            sent = await message.answer_photo(
+                _step_file_ids.get(key) or FSInputFile(path),
+                caption=caption,
+                reply_markup=reply_markup,
+            )
+
+            _step_file_ids[key] = sent.photo[-1].file_id
+
+            return sent
+
+        except Exception as exc:
+            logging.warning(
+                "Step image %s send failed: %r", key, exc
+            )
+
+    return await message.answer(
+        caption,
+        reply_markup=reply_markup,
+    )

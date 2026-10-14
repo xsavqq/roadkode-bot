@@ -102,6 +102,88 @@ def back_kb() -> InlineKeyboardMarkup:
     )
 
 
+# Категории шага 1. Подкатегории — только там, где они нужны.
+# Хотите добавить подкатегории — дописывайте списки справа.
+ORDER_CATEGORIES = [
+    ("👟 Обувь", ["Кроссовки", "Ботинки", "Кеды", "Сандалии", "Туфли"]),
+    ("🧥 Верхняя одежда", []),
+    ("👖 Штаны", []),
+    ("🩲 Нижнее бельё", []),
+    ("🧢 Головные уборы", []),
+    ("🧦 Носки", []),
+    ("🎒 Сумки / рюкзаки", []),
+    ("💍 Аксессуары", []),
+    ("💄 Косметика", []),
+    ("🏀 Спорт", []),
+    ("🧸 Фигурки", []),
+    ("📦 Другое", []),
+]
+
+
+def order_category_kb() -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+
+    for i, (title, _) in enumerate(ORDER_CATEGORIES):
+        row.append(
+            InlineKeyboardButton(
+                text=title,
+                callback_data=f"cat:{i}",
+            )
+        )
+
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+
+    if row:
+        rows.append(row)
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🏠 В меню",
+                callback_data="menu:home",
+            )
+        ]
+    )
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def order_subcategory_kb(cat_index: int) -> InlineKeyboardMarkup:
+    _, subs = ORDER_CATEGORIES[cat_index]
+
+    rows = []
+    row = []
+
+    for j, title in enumerate(subs):
+        row.append(
+            InlineKeyboardButton(
+                text=title,
+                callback_data=f"sub:{cat_index}:{j}",
+            )
+        )
+
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+
+    if row:
+        rows.append(row)
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="◀️ Назад к категориям",
+                callback_data="cat:back",
+            )
+        ]
+    )
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def assortment_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
