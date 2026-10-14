@@ -23,7 +23,12 @@ from config import (
 
 from handlers.cabinet import build_ref_text, orders_text
 from handlers.order import start_new_item
-from keyboards import STATUS_OPTIONS, back_kb, calc_result_kb
+from keyboards import (
+    STATUS_OPTIONS,
+    assortment_kb,
+    back_kb,
+    calc_result_kb,
+)
 from screens import send_home
 from states import CalcStates
 
@@ -311,6 +316,37 @@ async def calc_weight(
         "\n".join(lines),
         reply_markup=calc_result_kb(),
     )
+
+
+# =========================================================
+# АССОРТИМЕНТ  (с каких площадок выкупаем)
+# =========================================================
+
+ASSORTMENT_TEXT = (
+    "<b>[ ОТКУДА ВЫКУПАЕМ ]</b>\n\n"
+    "🛍 Taobao — огромный выбор на любой вкус по низким ценам\n"
+    "📦 1688 — оптовые цены, удобно брать от партии\n"
+    "👟 Poizon — оригинальная обувь и одежда с проверкой подлинности\n"
+    "🏷 Pinduoduo — самые низкие цены на базовые вещи и мелочи\n"
+    "📲 Weidian — магазины продавцов, часто редкие вещи\n\n"
+    "Нет нужной площадки? Пришли ссылку или фото — менеджер подскажет.\n\n"
+    "🛒 Оформить заказ — кнопка «Сделать заказ»."
+)
+
+
+@router.callback_query(F.data == "menu:assort")
+async def menu_assortment(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    await state.clear()
+
+    await callback.message.answer(
+        ASSORTMENT_TEXT,
+        reply_markup=assortment_kb(),
+    )
+
+    await callback.answer()
 
 
 # =========================================================
