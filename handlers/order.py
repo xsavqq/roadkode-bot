@@ -1,4 +1,4 @@
-from io import BytesIO
+Фfrom io import BytesIO
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
@@ -7,10 +7,13 @@ from aiogram.fsm.context import FSMContext
 import database as db
 from ai_vision import estimate_weight_from_image
 from config import calc_cost, yuan_rate_text
-from screens import drop_reply_kb
+from screens import drop_reply_kb, send_step
 from states import OrderStates
 
 from keyboards import (
+    ORDER_CATEGORIES,
+    order_category_kb,
+    order_subcategory_kb,
     after_item_added_kb,
     main_menu,
     cancel_kb,
@@ -45,6 +48,15 @@ async def cancel_order(
 # НАЧАЛО ДОБАВЛЕНИЯ ТОВАРА
 # =========================================================
 
+TOTAL_STEPS = 6
+
+CATEGORY_CAPTION = (
+    "<b>[ НОВЫЙ ЗАКАЗ ]</b>\n\n"
+    f"ШАГ 1 ИЗ {TOTAL_STEPS} · выберите категорию товара\n\n"
+    "категории ниже ⤵"
+)
+
+
 async def start_new_item(
     target,
     state: FSMContext,
@@ -52,40 +64,162 @@ async def start_new_item(
     await state.clear()
 
     await state.set_state(
-        OrderStates.waiting_link
+        OrderStates.choosing_category
     )
 
-    rate_text = yuan_rate_text()
+    message = (
+        target.message
+        if isinstance(target, CallbackQuery)
+        else target
+    )
 
-    link_text = (
-        "🔗 Отправьте ссылку на товар.\n\n"
-        "Если ссылки нет или вы не умеете её копировать — "
-        "отправьте символ -"
+    await message.answer(
+        yuan_rate_text()
+    )
+
+    await send_step(
+        message,
+        "category",
+        CATEGORY_CAPTION,
+        order_category_kb(),
     )
 
     if isinstance(target, CallbackQuery):
-
-        await target.message.answer(
-            rate_text
-        )
-
-        await target.message.answer(
-            link_text,
-            reply_markup=cancel_kb,
-        )
-
         await target.answer()
 
-    else:
 
-        await target.answer(
-            rate_text
+async def _edit_step(
+    callback: CallbackQuery,
+    text: str,
+    kb,
+):
+    """Меняет подпись/текст сообщения с кнопками категорий."""
+
+    try:
+        if callback.message.photo:
+            await callback.message.edit_caption(
+                caption=text,
+                reply_markup=kb,
+            )
+        else:
+            await callback.message.edit_text(
+                text,
+                reply_markup=kb,
+            )
+    except Exception:
+        await callback.message.answer(
+            text,
+            reply_markup=kb,
         )
 
-        await target.answer(
-            link_text,
-            reply_markup=cancel_kb,
+
+async def ask_link(message: Message):
+    await send_step(
+        message,
+        "link",
+        "<b>[ НОВЫЙ ЗАКАЗ ]</b>\n\n"
+        f"ШАГ 2 ИЗ {TOTAL_STEPS} · отправьте ссылку на товар\n"
+        "с Poizon, Taobao, 1688 и других площадок\n\n"
+        "Нет ссылки или не умеете её копировать — "
+        "отправьте -",
+        cancel_kb,
+    )
+
+
+# =========================================================
+# ШАГ 1: КАТЕГОРИЯ / ПОДКАТЕГОРИЯ
+# =========================================================
+
+@router.callback_query(
+    OrderStates.choosing_category,
+    F.data == "cat:back",
+)
+async def category_back(callback: CallbackQuery):
+    await _edit_step(
+        callback,
+        CATEGORY_CAPTION,
+        order_category_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    OrderStates.choosing_category,
+    F.data.startswith("cat:"),
+)
+async def category_chosen(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    try:
+        index = int(callback.data.split(":")[1])
+        title, subs = ORDER_CATEGORIES[index]
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
+
+    if subs:
+        await _edit_step(
+            callback,
+            "<b>[ НОВЫЙ ЗАКАЗ ]</b>\n\n"
+            f"ШАГ 1 ИЗ {TOTAL_STEPS} · {title}\n\n"
+            "уточните, что именно ⤵",
+            order_subcategory_kb(index),
         )
+        await callback.answer()
+        return
+
+    await _category_done(callback, state, title)
+
+
+@router.callback_query(
+    OrderStates.choosing_category,
+    F.data.startswith("sub:"),
+)
+async def subcategory_chosen(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    try:
+        _, i, j = callback.data.split(":")
+        title, subs = ORDER_CATEGORIES[int(i)]
+        label = f"{title} / {subs[int(j)]}"
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
+
+    await _category_done(callback, state, label)
+
+
+async def _category_done(
+    callback: CallbackQuery,
+    state: FSMContext,
+    label: str,
+):
+    await state.update_data(category=label)
+
+    await state.set_state(OrderStates.waiting_link)
+
+    await _edit_step(
+        callback,
+        "<b>[ НОВЫЙ ЗАКАЗ ]</b>\n\n"
+        f"товар: {label}",
+        None,
+    )
+
+    await ask_link(callback.message)
+
+    await callback.answer()
+
+
+# Старые кнопки категорий (после перезапуска бота состояние
+# сбрасывается) — просто начинаем заказ заново.
+@router.callback_query(F.data.startswith(("cat:", "sub:")))
+async def category_stale(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    await start_new_item(callback, state)
 
 
 # =========================================================
@@ -152,12 +286,20 @@ async def got_link_text(
     )
 
     await state.set_state(
-        OrderStates.waiting_photo
+        OrderStates.waiting_size
     )
 
-    await message.answer(
-        "📷 Отправьте фото или скрин товара.",
-        reply_markup=cancel_kb,
+    await ask_size(message)
+
+
+async def ask_size(message: Message):
+    await send_step(
+        message,
+        "size",
+        "<b>[ НОВЫЙ ЗАКАЗ ]</b>\n\n"
+        f"ШАГ 3 ИЗ {TOTAL_STEPS} · укажите размер\n"
+        "например: 42, M или -",
+        skip_cancel_kb,
     )
 
 
@@ -174,8 +316,8 @@ async def photo_before_link(
 ):
     await message.answer(
         "🔗 Сначала отправьте ссылку на товар.\n\n"
-        "Если ссылки нет или вы не умеете её копировать — "
-        "отправьте символ -",
+        "Фото можно будет приложить на последнем шаге.\n"
+        "Нет ссылки — отправьте -",
         reply_markup=cancel_kb,
     )
 
@@ -303,14 +445,13 @@ async def got_photo(
             "в сумму к оплате.\n"
 
             "Фактическая доставка будет уточнена "
-            "после взвешивания.\n\n"
-
-            "💴 Введите цену в юанях, только число.",
+            "после взвешивания.",
             reply_markup=cancel_kb,
         )
 
-        await state.set_state(
-            OrderStates.waiting_price
+        await save_item(
+            message,
+            state,
         )
 
     except Exception as exc:
@@ -336,14 +477,13 @@ async def got_photo(
             "Это не мешает оформить заказ.\n"
 
             "Фактический вес и доставка будут "
-            "уточнены после взвешивания.\n\n"
-
-            "💴 Введите цену в юанях, только число.",
+            "уточнены после взвешивания.",
             reply_markup=cancel_kb,
         )
 
-        await state.set_state(
-            OrderStates.waiting_price
+        await save_item(
+            message,
+            state,
         )
 
 
@@ -357,10 +497,29 @@ async def got_photo(
 )
 async def waiting_photo_text(
     message: Message,
+    state: FSMContext,
 ):
+    if message.text.strip().lower() in ("-", "нет", "no"):
+
+        await state.update_data(
+            photo_id=None,
+            weight_estimated=False,
+            estimated_weight_min=None,
+            estimated_weight_max=None,
+            estimated_weight_mid=None,
+        )
+
+        await save_item(
+            message,
+            state,
+        )
+
+        return
+
     await message.answer(
-        "📷 Отправьте фото или скрин товара.",
-        reply_markup=cancel_kb,
+        "📷 Пришлите фото или скрин товара "
+        "или напишите - чтобы пропустить.",
+        reply_markup=skip_cancel_kb,
     )
 
 
@@ -408,7 +567,9 @@ async def got_price(
     )
 
     await message.answer(
-        "🔢 Введите количество, только целое число.",
+        "<b>[ НОВЫЙ ЗАКАЗ ]</b>\n\n"
+        f"ШАГ 5 ИЗ {TOTAL_STEPS} · количество\n"
+        "только целое число, например: 1",
         reply_markup=cancel_kb,
     )
 
@@ -445,12 +606,13 @@ async def got_qty(
     )
 
     await state.set_state(
-        OrderStates.waiting_size
+        OrderStates.waiting_photo
     )
 
     await message.answer(
-        "📏 Введите размер.\n"
-        "Если размера нет — отправьте -",
+        "<b>[ НОВЫЙ ЗАКАЗ ]</b>\n\n"
+        f"ШАГ 6 ИЗ {TOTAL_STEPS} · пришлите фото товара\n"
+        "или напишите - чтобы пропустить",
         reply_markup=skip_cancel_kb,
     )
 
@@ -477,9 +639,17 @@ async def got_size(
         size=size
     )
 
-    await save_item(
+    await state.set_state(
+        OrderStates.waiting_price
+    )
+
+    await send_step(
         message,
-        state,
+        "price",
+        "<b>[ НОВЫЙ ЗАКАЗ ]</b>\n\n"
+        f"ШАГ 4 ИЗ {TOTAL_STEPS} · цена товара в юанях\n"
+        "только число, например: 350",
+        cancel_kb,
     )
 
 
@@ -534,7 +704,14 @@ async def save_item(
 
         quantity=quantity,
 
-        size=data.get("size"),
+        size=" · ".join(
+            part
+            for part in (
+                data.get("category"),
+                data.get("size"),
+            )
+            if part
+        ) or None,
 
         # AI-вес сохраняем для информации,
         # но shipping_rub = 0
