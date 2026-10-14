@@ -57,7 +57,7 @@ def main_inline_kb() -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(
                     text="🛍 Ассортимент",
-                    url=ASSORTMENT_URL,
+                    callback_data="menu:assort",
                 ),
             ],
             [
@@ -98,6 +98,35 @@ def back_kb() -> InlineKeyboardMarkup:
                     callback_data="menu:home",
                 )
             ]
+        ]
+    )
+
+
+def assortment_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛒 Сделать заказ",
+                    callback_data="menu:order",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📢 Смотреть в канале",
+                    url=ASSORTMENT_URL,
+                ),
+                InlineKeyboardButton(
+                    text="💬 Менеджер",
+                    url=manager_url(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏠 В меню",
+                    callback_data="menu:home",
+                ),
+            ],
         ]
     )
 
