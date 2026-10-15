@@ -120,6 +120,14 @@ STEP_IMAGES = {
     "link": "assets/step_link.jpg",
     "size": "assets/step_size.jpg",
     "price": "assets/step_price.jpg",
+
+    # заголовки разделов главного меню
+    "calc": "assets/menu_calc.jpg",
+    "assort": "assets/menu_assort.jpg",
+    "faq": "assets/menu_faq.jpg",
+    "orders": "assets/menu_orders.jpg",
+    "ref": "assets/menu_ref.jpg",
+    "bonus": "assets/menu_bonus.jpg",
 }
 
 # Баннер главного экрана (если файла нет — бот шлёт просто текст)
