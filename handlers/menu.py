@@ -29,7 +29,7 @@ from keyboards import (
     back_kb,
     calc_result_kb,
 )
-from screens import send_home
+from screens import send_header, send_home
 from states import CalcStates
 
 
@@ -78,6 +78,8 @@ async def menu_track(
 ):
     await state.clear()
 
+    await send_header(callback.message, "orders")
+
     text = await orders_text(callback.from_user.id)
 
     await callback.message.answer(
@@ -99,6 +101,8 @@ async def menu_ref(
     bot: Bot,
 ):
     await state.clear()
+
+    await send_header(callback.message, "ref")
 
     text, ref_link = await build_ref_text(
         callback.from_user.id,
@@ -155,6 +159,8 @@ async def menu_bonus(
     state: FSMContext,
 ):
     await state.clear()
+
+    await send_header(callback.message, "bonus")
 
     stats = await db.get_referral_stats(callback.from_user.id)
 
@@ -214,6 +220,8 @@ async def calc_start(
     state: FSMContext,
 ):
     await state.clear()
+
+    await send_header(callback.message, "calc")
     await state.set_state(CalcStates.waiting_price)
 
     await callback.message.answer(
@@ -341,6 +349,8 @@ async def menu_assortment(
 ):
     await state.clear()
 
+    await send_header(callback.message, "assort")
+
     await callback.message.answer(
         ASSORTMENT_TEXT,
         reply_markup=assortment_kb(),
@@ -426,6 +436,24 @@ async def menu_faq(
 ):
     await state.clear()
 
+    await send_header(callback.message, "faq")
+
+    await callback.message.answer(
+        "❓ <b>[ FAQ ]</b>\n\nВыберите вопрос:",
+        reply_markup=_faq_list_kb(),
+    )
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:faqlist")
+async def menu_faq_list(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    # «К вопросам» — без повторной картинки
+    await state.clear()
+
     await callback.message.answer(
         "❓ <b>[ FAQ ]</b>\n\nВыберите вопрос:",
         reply_markup=_faq_list_kb(),
@@ -450,7 +478,7 @@ async def faq_answer(callback: CallbackQuery):
                 [
                     InlineKeyboardButton(
                         text="◀️ К вопросам",
-                        callback_data="menu:faq",
+                        callback_data="menu:faqlist",
                     ),
                     InlineKeyboardButton(
                         text="🏠 В меню",
