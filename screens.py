@@ -136,3 +136,30 @@ async def send_step(
         caption,
         reply_markup=reply_markup,
     )
+
+
+async def send_header(message: Message, key: str):
+    """
+    Картинка-заголовок раздела (без подписи).
+    Если файла нет или Telegram его не принял — тихо пропускаем.
+    """
+
+    path = STEP_IMAGES.get(key)
+
+    if not path:
+        return
+
+    if not (_step_file_ids.get(key) or os.path.exists(path)):
+        return
+
+    try:
+        sent = await message.answer_photo(
+            _step_file_ids.get(key) or FSInputFile(path),
+        )
+
+        _step_file_ids[key] = sent.photo[-1].file_id
+
+    except Exception as exc:
+        logging.warning(
+            "Header image %s send failed: %r", key, exc
+        )
